@@ -1,12 +1,14 @@
 /**
  * 飞书 SDK 客户端初始化
  * 文档: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/server-side-sdk/nodejs-sdk/using-the-sdk
+ *
+ * 注意: .env 由 tsx -r dotenv/config 在启动时加载，此处不再重复加载
  */
 
 import lark from '@larksuiteoapi/node-sdk'
 import axios from 'axios'
 
-// 飞书应用配置
+// 飞书应用配置（由 tsx -r dotenv/config 加载）
 const FEISHU_APP_ID = process.env.FEISHU_APP_ID ?? ''
 const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET ?? ''
 

@@ -2,9 +2,16 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,12 +23,66 @@ import (
 	"gorm.io/gorm"
 )
 
+// 创建带代理支持的 HTTP Client
+func newGitHubHTTPClient() *http.Client {
+	transport := &http.Transport{}
+
+	// 优先使用 GitHub 专用代理
+	proxyStr := os.Getenv("GITHUB_HTTPS_PROXY")
+	if proxyStr == "" {
+		proxyStr = os.Getenv("GITHUB_HTTP_PROXY")
+	}
+	// 自动检测系统代理环境变量
+	if proxyStr == "" {
+		proxyStr = os.Getenv("HTTPS_PROXY")
+	}
+	if proxyStr == "" {
+		proxyStr = os.Getenv("https_proxy")
+	}
+	if proxyStr == "" {
+		proxyStr = os.Getenv("HTTP_PROXY")
+	}
+	if proxyStr == "" {
+		proxyStr = os.Getenv("http_proxy")
+	}
+
+	if proxyStr != "" {
+		proxyURL, err := url.Parse(proxyStr)
+		if err == nil && proxyURL.Host != "" && proxyURL.Port() != "" && proxyURL.Port() != "0" {
+			transport.Proxy = http.ProxyURL(proxyURL)
+			log.Printf("[GitHub OAuth] Using proxy: %s", proxyURL.String())
+		} else {
+			log.Printf("[GitHub OAuth] Invalid proxy config '%s', connecting directly", proxyStr)
+			transport.Proxy = nil
+		}
+	} else {
+		log.Printf("[GitHub OAuth] No proxy configured, connecting directly to GitHub")
+		transport.Proxy = nil
+	}
+
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+	}
+}
+
 var ErrAuthenticationRequired = errors.New("authentication required")
 
+// stringValue 安全获取字符串指针的值，如果为 nil 则返回默认值
+func stringValue(ptr *string, defaultValue string) string {
+	if ptr == nil {
+		return defaultValue
+	}
+	return *ptr
+}
+
 type AuthService struct {
-	repository   *repo.Repository
-	feishuClient *feishu.Client
-	sessionTTL   time.Duration
+	repository    *repo.Repository
+	feishuClient  *feishu.Client
+	sessionTTL    time.Duration
+	githubClientID     string
+	githubClientSecret string
+	githubRedirectURI  string
 }
 
 func NewAuthService(repository *repo.Repository, feishuClient *feishu.Client, sessionTTL time.Duration) *AuthService {
@@ -29,6 +90,17 @@ func NewAuthService(repository *repo.Repository, feishuClient *feishu.Client, se
 		repository:   repository,
 		feishuClient: feishuClient,
 		sessionTTL:   sessionTTL,
+	}
+}
+
+func NewAuthServiceWithGitHub(repository *repo.Repository, feishuClient *feishu.Client, sessionTTL time.Duration, githubClientID, githubClientSecret, githubRedirectURI string) *AuthService {
+	return &AuthService{
+		repository:        repository,
+		feishuClient:      feishuClient,
+		sessionTTL:        sessionTTL,
+		githubClientID:    githubClientID,
+		githubClientSecret: githubClientSecret,
+		githubRedirectURI: githubRedirectURI,
 	}
 }
 
@@ -42,6 +114,339 @@ func (s *AuthService) FeishuEnabled() bool {
 
 func (s *AuthService) FeishuOAuthScope() string {
 	return s.feishuClient.OAuthScope()
+}
+
+func (s *AuthService) GitHubClientID() string {
+	return s.githubClientID
+}
+
+// 直接通过 GitHub 用户信息创建会话（TS后端验证后调用）
+func (s *AuthService) LoginByGitHubUserID(ctx context.Context, userID, name, email, avatar string) (model.User, model.LoginSession, error) {
+	user := model.User{
+		ID:        userID,
+		Name:      name,
+		Email:     email,
+		AvatarURL: avatar,
+		Role:      model.RoleOther,
+	}
+	if user.Name == "" {
+		user.Name = "GitHub用户"
+	}
+	if email != "" {
+		user.Departments = inferDepartmentsFromEmail(email)
+	} else {
+		user.Departments = []string{"其他"}
+	}
+
+	// 如果用户已存在，保留原角色
+	if existing, err := s.repository.FindUserByID(ctx, user.ID); err == nil {
+		if existing.Role == model.RoleAdmin {
+			user.Role = model.RoleAdmin
+		}
+	}
+
+	// 保存用户
+	if err := s.repository.UpsertUser(ctx, &user); err != nil {
+		return model.User{}, model.LoginSession{}, err
+	}
+
+	// 创建登录会话
+	now := time.Now().UTC()
+	loginSession := model.LoginSession{
+		ID:        utils.NewID("login"),
+		UserID:    user.ID,
+		ExpiresAt: now.Add(s.sessionTTL),
+	}
+
+	if err := s.repository.CreateLoginSession(ctx, &loginSession); err != nil {
+		return model.User{}, model.LoginSession{}, err
+	}
+
+	return user, loginSession, nil
+}
+
+// GitHub OAuth 登录（独立登录模式）
+func (s *AuthService) LoginByGitHubCode(ctx context.Context, code string) (model.User, model.LoginSession, error) {
+	if s.githubClientID == "" || s.githubClientSecret == "" {
+		return model.User{}, model.LoginSession{}, errors.New("github oauth not configured")
+	}
+
+	// 1. 用 code 换取 access_token
+	tokenRes, err := s.exchangeGitHubCode(code)
+	if err != nil {
+		return model.User{}, model.LoginSession{}, err
+	}
+
+	// 2. 用 access_token 获取用户信息
+	profile, err := s.getGitHubUserInfo(tokenRes.AccessToken)
+	if err != nil {
+		return model.User{}, model.LoginSession{}, err
+	}
+
+	// 3. 创建/更新用户
+	user := model.User{
+		ID:        "gh_" + strconv.FormatInt(profile.ID, 10),
+		Name:      stringValue(profile.Name, profile.Login),
+		Email:     stringValue(profile.Email, ""),
+		AvatarURL: profile.AvatarURL,
+		Role:      model.RoleOther,
+	}
+	if user.Email == "" {
+		user.Departments = []string{"其他"}
+	} else {
+		// 尝试从邮箱推断部门
+		user.Departments = inferDepartmentsFromEmail(user.Email)
+	}
+
+	// 如果用户已存在，保留原角色
+	if existing, err := s.repository.FindUserByID(ctx, user.ID); err == nil {
+		if existing.Role == model.RoleAdmin {
+			user.Role = model.RoleAdmin
+		}
+	}
+
+	// 保存用户
+	if err := s.repository.UpsertUser(ctx, &user); err != nil {
+		return model.User{}, model.LoginSession{}, err
+	}
+
+	// 4. 创建登录会话
+	now := time.Now().UTC()
+	loginSession := model.LoginSession{
+		ID:        utils.NewID("login"),
+		UserID:    user.ID,
+		ExpiresAt: now.Add(s.sessionTTL),
+	}
+
+	if err := s.repository.CreateLoginSession(ctx, &loginSession); err != nil {
+		return model.User{}, model.LoginSession{}, err
+	}
+
+	return user, loginSession, nil
+}
+
+// BindGitHubToUser 为当前已登录用户绑定 GitHub 账号
+func (s *AuthService) BindGitHubToUser(ctx context.Context, userID string, code string) (model.User, error) {
+	if s.githubClientID == "" || s.githubClientSecret == "" {
+		return model.User{}, errors.New("github oauth not configured")
+	}
+
+	// 1. 用 code 换取 access_token
+	tokenRes, err := s.exchangeGitHubCode(code)
+	if err != nil {
+		return model.User{}, err
+	}
+
+	// 2. 用 access_token 获取用户信息
+	profile, err := s.getGitHubUserInfo(tokenRes.AccessToken)
+	if err != nil {
+		return model.User{}, err
+	}
+
+	// 3. 查找当前用户
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		return model.User{}, errors.New("user not found")
+	}
+
+	// 4. 绑定 GitHub 信息到当前用户
+	user.GitHubID = strconv.FormatInt(profile.ID, 10)
+	user.GitHubLogin = profile.Login
+	user.GitHubAvatar = profile.AvatarURL
+	user.GitHubAccessToken = tokenRes.AccessToken // 保存 access_token 用于后续 API 调用
+
+	// 保存用户
+	if err := s.repository.UpsertUser(ctx, &user); err != nil {
+		return model.User{}, err
+	}
+
+	return user, nil
+}
+
+// UnbindGitHubFromUser 解绑当前用户的 GitHub 账号
+func (s *AuthService) UnbindGitHubFromUser(ctx context.Context, userID string) (model.User, error) {
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		return model.User{}, errors.New("user not found")
+	}
+
+	user.GitHubID = ""
+	user.GitHubLogin = ""
+	user.GitHubAvatar = ""
+	user.GitHubAccessToken = ""
+
+	if err := s.repository.UpsertUser(ctx, &user); err != nil {
+		return model.User{}, err
+	}
+
+	return user, nil
+}
+
+type githubTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	Scope       string `json:"scope"`
+}
+
+type GitHubRepo struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Private  bool   `json:"private"`
+	HTMLURL  string `json:"html_url"`
+	Description string `json:"description"`
+}
+
+// ListGitHubRepos 获取当前用户的 GitHub 仓库列表
+func (s *AuthService) ListGitHubRepos(ctx context.Context, userID string) ([]GitHubRepo, error) {
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		log.Printf("[GitHub Repos] User not found: %s", userID)
+		return nil, errors.New("user not found")
+	}
+
+	log.Printf("[GitHub Repos] User %s GitHubAccessToken length: %d", userID, len(user.GitHubAccessToken))
+	if user.GitHubAccessToken == "" {
+		log.Printf("[GitHub Repos] GitHub not bound for user: %s", userID)
+		return nil, errors.New("github not bound")
+	}
+
+	req, err := http.NewRequest("GET", "https://api.github.com/user/repos?sort=updated&per_page=100", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+user.GitHubAccessToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	client := newGitHubHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[GitHub Repos] Request failed: %v", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	log.Printf("[GitHub Repos] Response status: %d", resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[GitHub Repos] Error response: %s", string(body))
+		return nil, fmt.Errorf("github api error: status=%d", resp.StatusCode)
+	}
+
+	var repos []GitHubRepo
+	if err := json.Unmarshal(body, &repos); err != nil {
+		log.Printf("[GitHub Repos] Parse error: %v, body: %s", err, string(body))
+		return nil, fmt.Errorf("failed to parse github repos response: %v", err)
+	}
+
+	log.Printf("[GitHub Repos] Found %d repos", len(repos))
+	return repos, nil
+}
+
+func (s *AuthService) exchangeGitHubCode(code string) (*githubTokenResponse, error) {
+	log.Printf("[GitHub OAuth] Exchanging code: client_id=%s, redirect_uri=%s", s.githubClientID, s.githubRedirectURI)
+	
+	data := url.Values{}
+	data.Set("client_id", s.githubClientID)
+	data.Set("client_secret", s.githubClientSecret)
+	data.Set("code", code)
+	data.Set("redirect_uri", s.githubRedirectURI)
+
+	req, err := http.NewRequest("POST", "https://github.com/login/oauth/access_token", strings.NewReader(data.Encode()))
+	if err != nil {
+		log.Printf("[GitHub OAuth] Failed to create request: %v", err)
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := newGitHubHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[GitHub OAuth] Request failed: %v", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	log.Printf("[GitHub OAuth] Response status: %d", resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[GitHub OAuth] Failed to read response body: %v", err)
+		return nil, err
+	}
+	
+	log.Printf("[GitHub OAuth] Response body: %s", string(body))
+
+	var result githubTokenResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse github token response: %v, body: %s", err, string(body))
+	}
+
+	if result.AccessToken == "" {
+		return nil, fmt.Errorf("github oauth failed: no access_token returned, body: %s", string(body))
+	}
+
+	return &result, nil
+}
+
+type githubUserResponse struct {
+	ID        int64   `json:"id"`
+	Login     string  `json:"login"`
+	Name      *string `json:"name"`
+	Email     *string `json:"email"`
+	AvatarURL string  `json:"avatar_url"`
+}
+
+func (s *AuthService) getGitHubUserInfo(accessToken string) (*githubUserResponse, error) {
+	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	client := newGitHubHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var user githubUserResponse
+	if err := json.Unmarshal(body, &user); err != nil {
+		return nil, fmt.Errorf("failed to parse github user response: %v", err)
+	}
+
+	return &user, nil
+}
+
+func inferDepartmentsFromEmail(email string) []string {
+	email = strings.ToLower(email)
+	domain := ""
+	if idx := strings.Index(email, "@"); idx > 0 {
+		domain = email[idx+1:]
+	}
+	switch {
+	case strings.Contains(domain, "product"):
+		return []string{"产品"}
+	case strings.Contains(domain, "frontend") || strings.Contains(domain, "front-end"):
+		return []string{"前端"}
+	case strings.Contains(domain, "backend") || strings.Contains(domain, "back-end") || strings.Contains(domain, "server"):
+		return []string{"后端"}
+	default:
+		return []string{"其他"}
+	}
 }
 
 func (s *AuthService) LoginByCode(ctx context.Context, code string) (model.User, model.LoginSession, error) {

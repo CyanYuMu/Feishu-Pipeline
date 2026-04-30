@@ -906,6 +906,112 @@ app.get('/health', async (_request, reply) => {
   reply.send({ status: 'ok', timestamp: new Date().toISOString() })
 })
 
+// GitHub OAuth 配置
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || ''
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || ''
+const GITHUB_REDIRECT_URI = process.env.GITHUB_REDIRECT_URI || 'http://localhost:3001/api/auth/github/callback'
+
+// 获取 GitHub OAuth 配置
+app.get("/api/auth/github/config", async (_request: FastifyRequest, reply: FastifyReply) => {
+  return reply.send({
+    success: true,
+    data: {
+      enabled: !!(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET),
+      clientId: GITHUB_CLIENT_ID,
+      authorizeUrl: 'https://github.com/login/oauth/authorize',
+      callbackUrl: GITHUB_REDIRECT_URI,
+    }
+  })
+})
+
+// GitHub OAuth 回调
+app.get("/api/auth/github/callback", async (request: FastifyRequest, reply: FastifyReply) => {
+  const { code, state } = request.query as { code?: string; state?: string }
+  
+  if (!code) {
+    return reply.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=no_code`)
+  }
+
+  try {
+    // 1. 用 code 换取 access_token
+    const tokenResponse = await axios.post(
+      'https://github.com/login/oauth/access_token',
+      {
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: GITHUB_REDIRECT_URI,
+      },
+      { headers: { Accept: 'application/json' } }
+    )
+
+    const accessToken = tokenResponse.data?.access_token
+    if (!accessToken) {
+      console.error('[GitHub OAuth] No access_token returned:', tokenResponse.data)
+      return reply.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=no_token`)
+    }
+
+    // 2. 用 access_token 获取用户信息
+    const userResponse = await axios.get('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github.v3+json',
+      },
+    })
+
+    const user = userResponse.data
+    console.log('[GitHub OAuth] User logged in:', user.login, user.email)
+
+    // 3. 调用 Go 后端创建会话
+    const userID = 'gh_' + user.id
+    console.log('[GitHub OAuth] Calling Go backend at http://localhost:8080/api/auth/github/login')
+    
+    let goResponse
+    try {
+      goResponse = await axios.post(
+        'http://localhost:8080/api/auth/github/login',
+        {
+          user_id: userID,
+          name: user.name || user.login,
+          email: user.email || '',
+          avatar: user.avatar_url || '',
+        },
+        { withCredentials: true }
+      )
+    } catch (err: any) {
+      // axios 会把 4xx/5xx 当作异常，err.response 里有详细信息
+      console.error('[GitHub OAuth] Go backend error:', err.response?.status, err.response?.data || err.message)
+      return reply.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=go_backend_error&detail=${encodeURIComponent(err.message)}`)
+    }
+
+    if (goResponse.data?.success) {
+      // 登录成功，跳转到首页
+      return reply.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/?github_login=success`)
+    } else {
+      console.error('[GitHub OAuth] Go backend login failed:', goResponse.data)
+      return reply.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=login_failed`)
+    }
+  } catch (err: any) {
+    console.error('[GitHub OAuth] Error:', err.response?.data || err.message)
+    return reply.redirect(
+      `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback?error=oauth_failed&detail=${encodeURIComponent(err.message)}`
+    )
+  }
+})
+
+// GitHub OAuth 获取授权 URL（前端使用）
+app.get("/api/auth/github/url", async (_request: FastifyRequest, reply: FastifyReply) => {
+  if (!GITHUB_CLIENT_ID) {
+    return reply.status(500).send({ success: false, error: 'GitHub OAuth not configured' })
+  }
+
+  const scope = encodeURIComponent('read:user user:email')
+  const state = Math.random().toString(36).substring(7)
+  const authorizeUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(GITHUB_REDIRECT_URI)}&scope=${scope}&state=${state}`
+
+  return reply.send({ success: true, data: { url: authorizeUrl } })
+})
+
 const PORT = Number(process.env.PORT ?? 3001)
 
 try {

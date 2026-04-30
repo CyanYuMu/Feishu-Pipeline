@@ -2,6 +2,162 @@ import axios from 'axios'
 import {OpenAI} from 'openai'
 import { sendMessage } from '../../lib/feishu.js'
 
+// ============ HTTP API Test Tool ============
+
+interface TestCase {
+  name: string
+  url: string
+  method: string
+  headers?: Record<string, string>
+  params?: Record<string, unknown>
+  json?: Record<string, unknown>
+  assertions: Array<{
+    type: string
+    key?: string
+    expect: unknown
+  }>
+}
+
+interface TestResult {
+  name: string
+  url: string
+  method: string
+  status: number
+  response: unknown
+  passed: boolean
+  assertions: Array<{
+    type: string
+    key?: string
+    expect: unknown
+    actual: unknown
+    passed: boolean
+  }>
+  error?: string
+  duration: number
+}
+
+/**
+ * 自动批量测试 HTTP 接口
+ * @param base_url 接口基础域名
+ * @param test_cases 批量接口测试用例列表
+ */
+export async function testApi(base_url: string, test_cases: TestCase[]): Promise<{
+  success: boolean
+  summary: {
+    total: number
+    passed: number
+    failed: number
+    duration: number
+  }
+  results: TestResult[]
+}> {
+  const startTime = Date.now()
+  const results: TestResult[] = []
+
+  for (const tc of test_cases) {
+    const caseStart = Date.now()
+    const fullUrl = `${base_url.replace(/\/$/, '')}${tc.url}`
+    let response: any = null
+    let status = 0
+    let error: string | undefined
+
+    try {
+      const config: any = {
+        method: tc.method.toLowerCase(),
+        url: fullUrl,
+        headers: tc.headers || {},
+        timeout: 30000,
+      }
+
+      if (tc.params) {
+        config.params = tc.params
+      }
+      if (tc.json) {
+        config.data = tc.json
+      }
+
+      const res = await axios(config)
+      response = res.data
+      status = res.status
+    } catch (err: any) {
+      if (err.response) {
+        status = err.response.status
+        response = err.response.data
+      }
+      error = err.message
+    }
+
+    // 执行断言
+    const assertionResults = tc.assertions.map(assertion => {
+      let actual: unknown
+      let passed = false
+
+      if (assertion.type === 'status_code') {
+        actual = status
+        passed = status === assertion.expect
+      } else if (assertion.type === 'json_key') {
+        actual = getJsonValue(response, assertion.key || '')
+        passed = JSON.stringify(actual) === JSON.stringify(assertion.expect)
+      } else {
+        actual = null
+        passed = false
+      }
+
+      return {
+        type: assertion.type,
+        key: assertion.key,
+        expect: assertion.expect,
+        actual,
+        passed,
+      }
+    })
+
+    const allPassed = !error && assertionResults.every(a => a.passed)
+
+    results.push({
+      name: tc.name,
+      url: fullUrl,
+      method: tc.method,
+      status,
+      response,
+      passed: allPassed,
+      assertions: assertionResults,
+      error,
+      duration: Date.now() - caseStart,
+    })
+  }
+
+  const totalDuration = Date.now() - startTime
+  const passed = results.filter(r => r.passed).length
+
+  return {
+    success: passed === results.length,
+    summary: {
+      total: results.length,
+      passed,
+      failed: results.length - passed,
+      duration: totalDuration,
+    },
+    results,
+  }
+}
+
+/**
+ * 从 JSON 对象中获取嵌套字段值
+ * @param obj JSON 对象
+ * @param path 字段路径，如 "data.user.name"
+ */
+function getJsonValue(obj: any, path: string): unknown {
+  if (!path) return obj
+  const keys = path.split('.')
+  let current = obj
+  for (const key of keys) {
+    if (current === null || current === undefined) return undefined
+    current = current[key]
+  }
+  return current
+}
+
 // 飞书应用配置
 const FEISHU_APP_ID = process.env.FEISHU_APP_ID ?? ''
 const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET ?? ''
@@ -443,6 +599,51 @@ export const documentTools = [
   }
     },
     
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "testApi",
+      description: "自动批量测试HTTP接口，支持GET/POST/DELETE/PUT等方法，自动断言状态码和响应字段，返回测试报告。当用户需要测试API接口、验证接口可用性或进行接口回归测试时调用此工具。",
+      parameters: {
+        type: "object",
+        properties: {
+          base_url: {
+            type: "string",
+            description: "接口基础域名，例如 https://api.example.com 或 http://localhost:8080"
+          },
+          test_cases: {
+            type: "array",
+            description: "批量接口测试用例列表",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "用例名称" },
+                url: { type: "string", description: "接口路径（拼接base_url）" },
+                method: { type: "string", description: "请求方法 GET/POST/PUT/DELETE" },
+                headers: { type: "object", description: "请求头，可选" },
+                params: { type: "object", description: "GET参数，可选" },
+                json: { type: "object", description: "POST JSON参数，可选" },
+                assertions: {
+                  type: "array",
+                  description: "断言规则",
+                  items: {
+                    type: "object",
+                    properties: {
+                      type: { type: "string", description: "断言类型 status_code/json_key" },
+                      key: { type: "string", description: "json字段名，status_code无需传" },
+                      expect: { type: "any", description: "预期值" }
+                    }
+                  }
+                }
+              },
+              required: ["name", "url", "method", "assertions"]
+            }
+          }
+        },
+        required: ["base_url", "test_cases"]
+      }
+    }
   }
 ]
 
@@ -496,6 +697,8 @@ export const documentToolHandlers = {
       spec_sample: JSON.stringify(args.openapi_spec).substring(0, 500)
     })
     try {
+      // 动态导入避免编译时依赖缺失
+      const { importOpenApiFromSpec } = await import('../../lib/apifox.js')
       const result = await importOpenApiFromSpec(args.project_id, args.openapi_spec, args.options || {})
       console.log('[AI Tool] importOpenApiFromSpec result:', result)
       if (result.success) {
@@ -560,6 +763,16 @@ export const documentToolHandlers = {
     } catch (err: any) {
       console.error('[createFeishuDocument] Error:', err.response?.data || err.message)
       return JSON.stringify({ success: false, error: err.response?.data?.msg || err.message })
+    }
+  },
+  testApi: async (args: { base_url: string; test_cases: TestCase[] }) => {
+    console.log('[AI Tool] testApi called with:', args.base_url, args.test_cases.length, 'cases')
+    try {
+      const result = await testApi(args.base_url, args.test_cases)
+      return JSON.stringify(result)
+    } catch (err: any) {
+      console.error('[AI Tool] testApi error:', err)
+      return JSON.stringify({ success: false, error: err.message })
     }
   },
   createFeishuDocumentBlocks: async (args: { user_token: string; document_id: string; blocks: Array<{block_type: number; content: string}> }) => {
@@ -774,6 +987,7 @@ export async function runAIChatStream(
 2. 生成API接口设计文档
 3. **创建飞书文档并写入内容（必须调用工具，禁止直接输出文本）**
 4. **生成 Swagger UI 可视化接口文档（必须调用 saveOpenApiSpec）**
+5. **生成测试用例并执行接口测试（必须调用 testApi）**
 
 ## 强制规则
 **重要：你必须调用工具完成工作，禁止直接输出文本内容！**
@@ -782,45 +996,37 @@ export async function runAIChatStream(
 - **必须**先调用 createFeishuDocument 创建文档
 - **必须**再调用 createFeishuDocumentBlocks 写入内容
 - **必须**调用 saveOpenApiSpec 保存 OpenAPI JSON 并获取 Swagger UI 链接
+- **必须**调用 testApi 执行接口测试
 - **严格禁止：禁止调用任何发送消息的工具！**
 
 ## 可用工具
 
 ### 0. extractContentFromUrls - 自动提取文档内容（**优先使用**）
-当用户的输入中包含飞书文档链接时，**必须首先调用此工具**提取文档内容：
+当用户的输入中包含飞书文档链接时，**必须首先调用此工具**提取文档内容。
 - text: 用户输入的完整文本（包含可能的文档链接）
 - user_token: 飞书用户token（使用: ${userToken || '未提供'}）
 
 ### 1. createFeishuDocument - 创建飞书文档
-当需要为用户生成文档时调用：
-- user_token: 飞书用户token
-- title: 文档标题
-- folder_token: 可选
+当需要为用户生成文档时调用：user_token, title, folder_token(可选)
 
 ### 2. createFeishuDocumentBlocks - 写入文档内容
-创建文档后调用此工具写入内容：
-- user_token: 飞书用户token
-- document_id: 创建文档返回的ID
-- blocks: 内容块数组，每项包含：
-  - block_type: 2=文本段落, 3=标题1, 4=标题2, 5=标题3, 14=代码块
-  - content: 文本内容（**每个 content 不要超过 200 字符**）
-  - **JSON格式要求：content 中的引号必须转义为 \", 换行必须使用 \n**
+创建文档后调用此工具写入内容：user_token, document_id, blocks(内容块数组)
 
 ### 3. saveOpenApiSpec - 保存 OpenAPI JSON 并生成 Swagger UI
-**必须调用此工具**来生成可交互的接口调试页面：
-- spec: 完整的 OpenAPI 3.0 规范 JSON 对象，包含：
-  - openapi: "3.0.0"
-  - info: { title, version, description }
-  - paths: 接口路径对象
-  - components: { schemas: 数据模型 }
+**必须调用此工具**来生成可交互的接口调试页面。
 
-## 工作流程
-1. **提取文档内容**：如果用户输入包含飞书文档链接，先调用 extractContentFromUrls
-2. **分析需求**：结合提取的文档内容，理解用户需求
-3. **设计API**：根据需求设计API接口
-4. **创建文档**：调用 createFeishuDocument（只需一次）
-5. **写入内容**：调用 createFeishuDocumentBlocks（只需一次，不要重复调用！）
-6. **生成Swagger UI**：调用 saveOpenApiSpec 保存 OpenAPI JSON
+### 4. testApi - 执行接口测试
+**生成API后必须调用此工具测试接口**，base_url 为 http://localhost:3001，test_cases 包含用例名称、接口路径、请求方法、参数和断言规则。
+
+## 工作流程（接口对接模式）
+1. 提取文档内容（如有链接）
+2. 分析需求
+3. 设计API
+4. 创建文档并写入内容
+5. 生成Swagger UI
+6. 生成测试用例
+7. 调用 testApi 执行测试
+8. 分析测试结果并给出结论
 
 ## 重要提醒
 - **createFeishuDocumentBlocks 只能调用一次！**调用后直接返回文档链接，不要再次调用
@@ -1021,6 +1227,7 @@ export async function runAIChat(userMessage: string, messages: any[] = [], isFir
 1. 分析用户需求文档（**自动识别文本中的飞书文档链接并提取内容**）
 2. 生成API接口设计文档
 3. **创建飞书文档并写入内容（必须调用工具，禁止直接输出文本）**
+4. **生成测试用例并执行接口测试（必须调用 testApi）**
 
 ## 强制规则
 **重要：你必须调用工具完成工作，禁止直接输出文本内容！**
@@ -1028,38 +1235,31 @@ export async function runAIChat(userMessage: string, messages: any[] = [], isFir
 - 不要直接输出代码
 - **必须**先调用 createFeishuDocument 创建文档
 - **必须**再调用 createFeishuDocumentBlocks 写入内容
+- **必须**调用 testApi 执行接口测试
 - **严格禁止：禁止调用任何发送消息的工具！**
 
 ## 可用工具
 
 ### 0. extractContentFromUrls - 自动提取文档内容（**优先使用**）
-当用户的输入中包含飞书文档链接时，**必须首先调用此工具**提取文档内容：
-- text: 用户输入的完整文本（包含可能的文档链接）
-- user_token: 飞书用户token（使用: ${userToken || '未提供'}）
-- 此工具会自动识别文本中的所有飞书文档链接（支持 https://feishu.cn/docx/xxx 和 https://feishu.cn/wiki/xxx 格式）并提取内容
+当用户的输入中包含飞书文档链接时，**必须首先调用此工具**提取文档内容。
 
 ### 1. createFeishuDocument - 创建飞书文档
-当需要为用户生成文档时调用：
-- user_token: 飞书用户token（使用: ${userToken || '未提供'}）
-- title: 文档标题
-- folder_token: 可选，文件夹token
+当需要为用户生成文档时调用：user_token, title, folder_token(可选)
 
 ### 2. createFeishuDocumentBlocks - 写入文档内容
-创建文档后调用此工具写入内容：
-- user_token: 飞书用户token（使用: ${userToken || '未提供'}）
-- document_id: 创建文档返回的ID
-- blocks: 内容块数组，每项包含：
-  - block_type: 2=文本段落, 3=标题1, 4=标题2, 5=标题3, 14=代码块, 17=分割线
-  - content: 文本内容（**注意：每个 content 不要超过 200 字符，避免超出 token 限制**）
-  - **JSON格式要求：content 中的引号必须转义为 \\"，换行必须使用 \\n，禁止使用未转义的特殊字符**
-  - **不要使用 block_type 11/12（列表），改用 block_type 2（文本），在 content 前加 "• " 表示列表项**
+创建文档后调用此工具写入内容：user_token, document_id, blocks(内容块数组)
+
+### 3. testApi - 执行接口测试
+**生成API后必须调用此工具测试接口**，base_url 为 http://localhost:3001，test_cases 包含用例名称、接口路径、请求方法、参数和断言规则。
 
 ## 工作流程
-1. **提取文档内容**：如果用户输入包含飞书文档链接，先调用 extractContentFromUrls 提取文档内容
-2. **分析需求**：结合提取的文档内容，理解用户需求
-3. **设计API**：根据需求设计API接口
-4. **创建文档**：调用 createFeishuDocument 创建文档
-5. **写入内容**：调用 createFeishuDocumentBlocks 写入完整的API设计文档（只需一次，不要重复！）
+1. 提取文档内容（如有链接）
+2. 分析需求
+3. 设计API
+4. 创建文档并写入内容
+5. 生成测试用例
+6. 调用 testApi 执行测试
+7. 分析测试结果并给出结论
 
 ## 重要提醒
 - **createFeishuDocumentBlocks 只能调用一次！**调用后直接返回文档链接，不要再次调用
@@ -1067,7 +1267,7 @@ export async function runAIChat(userMessage: string, messages: any[] = [], isFir
 - **不要调用任何发送消息的工具**
 
 ## 输出格式
-创建文档后，返回文档链接即可。
+创建文档后，返回文档链接和测试结果摘要即可。
 `}
         ]
         

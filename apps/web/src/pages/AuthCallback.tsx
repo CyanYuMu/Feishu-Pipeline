@@ -23,37 +23,98 @@ function postFeishuSSOLogin(code: string): Promise<Response> {
   return p
 }
 
+// 调用后端接口绑定 GitHub 账号到当前登录用户
+async function bindGitHub(code: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/github/bind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ code }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 export default function AuthCallback() {
   const navigate = useNavigate()
 
   useEffect(() => {
     const handleCallback = async () => {
-      // 从 URL 获取 code 和 state
       const params = new URLSearchParams(window.location.search)
       const code = params.get('code')
       const state = params.get('state')
-      const savedState = sessionStorage.getItem('feishu_auth_state')
+      
+      // 检查是否是 GitHub OAuth 回调
+      const isGitHubBind = sessionStorage.getItem('github_bind_mode') === 'true'
+      
+      if (isGitHubBind) {
+        // GitHub 绑定回调
+        const savedState = sessionStorage.getItem('github_auth_state')
+        
+        // 验证 state
+        if (state && savedState && state !== savedState) {
+          message.error('state 验证失败，请重试')
+          sessionStorage.removeItem('github_bind_mode')
+          sessionStorage.removeItem('github_auth_state')
+          navigate({ to: '/' })
+          return
+        }
+        
+        if (!code) {
+          message.error('未获取到授权码')
+          sessionStorage.removeItem('github_bind_mode')
+          sessionStorage.removeItem('github_auth_state')
+          navigate({ to: '/' })
+          return
+        }
+        
+        // 调用后端绑定接口
+        try {
+          const success = await bindGitHub(code)
+          if (success) {
+            sessionStorage.removeItem('github_bind_mode')
+            sessionStorage.removeItem('github_auth_state')
+            message.success('GitHub 绑定成功')
+            navigate({ to: '/' })
+          } else {
+            throw new Error('绑定失败')
+          }
+        } catch (e) {
+          console.error('GitHub bind error:', e)
+          message.error('GitHub 绑定失败，请重试')
+          sessionStorage.removeItem('github_bind_mode')
+          sessionStorage.removeItem('github_auth_state')
+          navigate({ to: '/' })
+        }
+        return
+      }
 
+      // 飞书 OAuth 回调
+      const savedState = sessionStorage.getItem('feishu_auth_state')
+      
       // 验证 state
       if (state && savedState && state !== savedState) {
         message.error('state 验证失败，请重试')
         navigate({ to: '/' })
         return
       }
-
+      
       if (!code) {
         message.error('未获取到授权码')
         navigate({ to: '/' })
         return
       }
-
+      
       try {
         const res = await postFeishuSSOLogin(code)
-
+        
         if (!res.ok) {
           throw new Error('登录失败')
         }
-
+        
         // 清除 state
         sessionStorage.removeItem('feishu_auth_state')
         
@@ -64,13 +125,13 @@ export default function AuthCallback() {
         navigate({ to: '/' })
       }
     }
-
+    
     handleCallback()
   }, [navigate])
-
+  
   return (
     <div className="flex items-center justify-center min-h-screen">
-      <Spin size="large" tip="正在登录..." />
+      <Spin size="large" tip="正在处理..." />
     </div>
   )
 }

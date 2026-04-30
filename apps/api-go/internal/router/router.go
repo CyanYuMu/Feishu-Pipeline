@@ -27,11 +27,17 @@ func New(deps Dependencies) *gin.Engine {
 	engine.GET("/api/health", deps.HealthController.Health)
 	engine.GET("/api/auth/feishu/config", deps.AuthController.FeishuConfig)
 	engine.POST("/api/auth/feishu/sso/login", deps.AuthController.SSOLogin)
+	engine.POST("/api/auth/github/login", deps.AuthController.GitHubLogin)
+	engine.GET("/api/auth/github/authorize", deps.AuthController.GitHubAuthorize)
+	engine.GET("/api/auth/github/callback", deps.AuthController.GitHubCallback)
 	engine.POST("/api/auth/logout", deps.AuthController.Logout)
 
 	authenticated := engine.Group("/api")
 	authenticated.Use(middleware.RequireAuth())
 	authenticated.GET("/me", deps.AuthController.Me)
+	authenticated.POST("/auth/github/bind", deps.AuthController.GitHubBind)
+	authenticated.POST("/auth/github/unbind", deps.AuthController.GitHubUnbind)
+	authenticated.GET("/github/repos", deps.AuthController.GitHubRepos)
 	authenticated.GET("/sessions", deps.SessionController.ListSessions)
 	authenticated.POST("/sessions", deps.SessionController.CreateSession)
 	authenticated.GET("/sessions/:sessionID", deps.SessionController.GetSession)
@@ -76,6 +82,15 @@ func New(deps Dependencies) *gin.Engine {
 	// OpenAPI Spec 接口（不需要认证，供 AI 工具调用）
 	engine.POST("/public/openapi/specs", deps.OpenAPIController.SaveSpecPublic)
 	engine.GET("/public/openapi/specs/:specId", deps.OpenAPIController.GetSpecPublic)
+	engine.GET("/public/openapi/specs", deps.OpenAPIController.ListSpecsPublic)
+	engine.PUT("/public/openapi/specs/:specId", deps.OpenAPIController.UpdateSpecPublic)
+
+	// Project 项目接口
+	engine.POST("/public/projects", deps.OpenAPIController.CreateProject)
+	engine.GET("/public/projects", deps.OpenAPIController.ListProjects)
+	engine.GET("/public/projects/:projectId", deps.OpenAPIController.GetProject)
+	engine.PUT("/public/projects/:projectId", deps.OpenAPIController.UpdateProject)
+	engine.GET("/public/projects/:projectId/specs", deps.OpenAPIController.GetProjectSpecs)
 
 	return engine
 }

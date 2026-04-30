@@ -47,3 +47,17 @@ deploy/config.yaml
 # API Documentation
 API.md
 Feishu-Pipeline-API.postman_collection.json
+spec.md
+
+# Binaries
+*.exe
+*.exe~
+server.exe
+
+# Local development files
+apps/api-ts/dev.err
+apps/api-ts/dev.log
+
+# Project documents
+TASKS.md
+报告.md

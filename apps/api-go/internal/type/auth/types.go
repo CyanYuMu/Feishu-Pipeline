@@ -10,6 +10,10 @@ type UserResponse struct {
 	AvatarUrl    string     `json:"avatarUrl,omitempty"`
 	Role         model.Role `json:"role"`
 	Departments  []string   `json:"departments"`
+	// GitHub 绑定信息
+	GitHubID     string `json:"githubId,omitempty"`
+	GitHubLogin  string `json:"githubLogin,omitempty"`
+	GitHubAvatar string `json:"githubAvatar,omitempty"`
 }
 
 type FeishuSSOLoginRequest struct {
@@ -35,6 +39,9 @@ func NewUserResponse(user model.User) UserResponse {
 		AvatarUrl:    user.AvatarURL,
 		Role:         user.Role,
 		Departments:  user.Departments,
+		GitHubID:     user.GitHubID,
+		GitHubLogin:  user.GitHubLogin,
+		GitHubAvatar: user.GitHubAvatar,
 	}
 }
 

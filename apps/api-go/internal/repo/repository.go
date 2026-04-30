@@ -84,6 +84,7 @@ func (r *Repository) AutoMigrate(ctx context.Context) error {
 		&model.KnowledgeSource{},
 		&model.MessageDelivery{},
 		&model.OpenAPISpec{},
+		&model.Project{},
 		&model.PipelineTemplate{},
 		&model.PipelineRun{},
 		&model.StageRun{},
@@ -199,6 +200,10 @@ func (r *Repository) FindLoginSessionByID(ctx context.Context, sessionID string)
 	var session model.LoginSession
 	err := r.db.WithContext(ctx).First(&session, "id = ?", sessionID).Error
 	return session, err
+}
+
+func (r *Repository) CreateLoginSession(ctx context.Context, session *model.LoginSession) error {
+	return r.db.WithContext(ctx).Create(session).Error
 }
 
 func (r *Repository) DeleteLoginSessionByID(ctx context.Context, sessionID string) error {
@@ -480,6 +485,44 @@ func (r *Repository) GetOpenAPISpec(ctx context.Context, id string) (model.OpenA
 	var spec model.OpenAPISpec
 	err := r.db.WithContext(ctx).First(&spec, "id = ?", id).Error
 	return spec, err
+}
+
+func (r *Repository) ListOpenAPISpecs(ctx context.Context) ([]model.OpenAPISpec, error) {
+	var specs []model.OpenAPISpec
+	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&specs).Error
+	return specs, err
+}
+
+func (r *Repository) ListOpenAPISpecsByProject(ctx context.Context, projectID string) ([]model.OpenAPISpec, error) {
+	var specs []model.OpenAPISpec
+	err := r.db.WithContext(ctx).Where("project_id = ?", projectID).Order("created_at DESC").Find(&specs).Error
+	return specs, err
+}
+
+func (r *Repository) UpdateOpenAPISpec(ctx context.Context, id string, updates map[string]interface{}) error {
+	return r.db.WithContext(ctx).Model(&model.OpenAPISpec{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// Project CRUD
+
+func (r *Repository) CreateProject(ctx context.Context, project *model.Project) error {
+	return r.db.WithContext(ctx).Create(project).Error
+}
+
+func (r *Repository) GetProject(ctx context.Context, id string) (model.Project, error) {
+	var project model.Project
+	err := r.db.WithContext(ctx).First(&project, "id = ?", id).Error
+	return project, err
+}
+
+func (r *Repository) ListProjects(ctx context.Context) ([]model.Project, error) {
+	var projects []model.Project
+	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&projects).Error
+	return projects, err
+}
+
+func (r *Repository) UpdateProject(ctx context.Context, id string, updates map[string]interface{}) error {
+	return r.db.WithContext(ctx).Model(&model.Project{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func (r *Repository) seedPipelineTemplatesTx(ctx context.Context, tx *gorm.DB) error {

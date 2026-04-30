@@ -1,5 +1,6 @@
 import { Link, useLocation } from '@tanstack/react-router'
 import { useEffect, useState, useRef } from 'react'
+import { Modal, Tag, Button, Spin, message } from 'antd'
 
 const mainNavItems = [
   { icon: 'home', label: 'Home', to: '/' },
@@ -16,6 +17,10 @@ interface User {
   name: string
   avatarUrl: string
   departments: string[]
+  // GitHub 绑定信息
+  githubId?: string
+  githubLogin?: string
+  githubAvatar?: string
 }
 
 interface Session {
@@ -42,6 +47,9 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
   const menuRef = useRef<HTMLDivElement>(null)
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(true)
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false)
+  const [userBindings, setUserBindings] = useState<{feishu?: {openId: string, name: string}, github?: {id: string, login: string}}>({})
+  const [loadingBindings, setLoadingBindings] = useState(false)
 
   // 在主页和会话详情页均显示会话面板
   const showConversationPanel = pathname === '/' || pathname.startsWith('/sessions')
@@ -127,6 +135,120 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
     }
   }
 
+  // 打开设置弹窗
+  const openSettings = async () => {
+    setShowMenu(false)
+    setSettingsModalVisible(true)
+    await loadUserBindings()
+  }
+
+  // 加载账号绑定信息
+  const loadUserBindings = async () => {
+    setLoadingBindings(true)
+    try {
+      // 获取当前用户信息来解析绑定的账号类型
+      const res = await fetch('/api/me', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        const userData = data.data
+        const bindings: typeof userBindings = {}
+
+        // 飞书登录用户（id 以 fs_ 开头）
+        if (userData?.id?.startsWith('fs_')) {
+          bindings.feishu = {
+            openId: userData.feishuOpenID || userData.id.replace('fs_', ''),
+            name: userData.name || '飞书用户'
+          }
+          // 检查是否绑定了 GitHub
+          if (userData.githubId) {
+            bindings.github = {
+              id: userData.githubId,
+              login: userData.githubLogin || 'GitHub用户'
+            }
+          }
+        }
+        // GitHub 登录用户（id 以 gh_ 开头）
+        else if (userData?.id?.startsWith('gh_')) {
+          bindings.github = {
+            id: userData.id.replace('gh_', ''),
+            login: userData.name || 'GitHub用户'
+          }
+        }
+
+        setUserBindings(bindings)
+      }
+    } catch (err) {
+      console.error('加载账号绑定信息失败:', err)
+    } finally {
+      setLoadingBindings(false)
+    }
+  }
+
+  // 解绑飞书
+  const handleUnbindFeishu = () => {
+    message.info('请联系管理员解绑飞书账号')
+  }
+
+  // 解绑 GitHub
+  const handleUnbindGitHub = async () => {
+    try {
+      const res = await fetch('/api/auth/github/unbind', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      if (res.ok) {
+        message.success('GitHub 解绑成功')
+        loadUserBindings()
+      } else {
+        message.error('解绑失败，请重试')
+      }
+    } catch (err) {
+      console.error('解绑 GitHub 失败:', err)
+      message.error('解绑 GitHub 账号失败')
+    }
+  }
+
+  // 绑定飞书
+  const handleBindFeishu = async () => {
+    try {
+      const res = await fetch('/api/auth/feishu/config')
+      if (!res.ok) throw new Error('Failed to get config')
+      const data = await res.json()
+      const config = data.data
+      if (!config?.enabled) { message.error('飞书登录未启用'); return }
+      
+      const state = Math.random().toString(36).substring(2)
+      sessionStorage.setItem('feishu_auth_state', state)
+      const redirectUri = `${window.location.origin}/auth/callback`
+      const authUrl = `https://open.feishu.cn/open-apis/authen/v1/authorize?` +
+        `app_id=${config.appId}&` +
+        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+        `state=${state}`
+      window.location.href = authUrl
+    } catch (err) {
+      console.error('绑定飞书失败:', err)
+      message.error('绑定飞书账号失败')
+    }
+  }
+
+  // 绑定 GitHub - 前端直接跳转 GitHub 授权，回调到前端页面
+  const handleBindGitHub = async () => {
+    try {
+      const clientId = 'Ov23ligSIYJehzkAIv5R'
+      const redirectUri = `${window.location.origin}/auth/callback`
+      const state = Math.random().toString(36).substring(2)
+      sessionStorage.setItem('github_bind_mode', 'true')
+      sessionStorage.setItem('github_auth_state', state)
+
+      // 构建 GitHub 授权 URL，回调到前端 AuthCallback 页面
+      const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email,repo&state=${state}`
+      window.location.href = authUrl
+    } catch (err) {
+      console.error('绑定 GitHub 失败:', err)
+      message.error('绑定 GitHub 账号失败')
+    }
+  }
+
   return (
     <>
       {/* COLUMN 1: Global Navigation (SideNavBar - main_nav) - 固定宽度 80px */}
@@ -196,6 +318,7 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
                   <p className="text-xs text-slate-500 truncate">{user.departments?.length > 0 ? user.departments[0] : user.id}</p>
                 </div>
                 <button
+                  onClick={openSettings}
                   className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/50 flex items-center gap-3 transition-colors"
                 >
                   <span className="material-symbols-outlined text-base">settings</span>
@@ -293,6 +416,111 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
           </aside>
         </>
       )}
+
+      {/* 设置弹窗 */}
+      <Modal
+        title="账号设置"
+        open={settingsModalVisible}
+        onCancel={() => setSettingsModalVisible(false)}
+        footer={null}
+        width={480}
+      >
+        {loadingBindings ? (
+          <div className="flex justify-center py-8">
+            <Spin />
+          </div>
+        ) : (
+          <div className="py-4">
+            {/* 当前登录方式 */}
+            <div className="mb-6">
+              <h4 className="text-sm font-medium text-slate-700 mb-3">当前登录方式</h4>
+              <div className="bg-slate-50 rounded-lg p-4">
+                {userBindings.feishu ? (
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center">
+                      <span className="text-white font-bold text-sm">F</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium text-slate-800">飞书账号</div>
+                      <div className="text-sm text-slate-500">{userBindings.feishu.name}</div>
+                    </div>
+                    <Tag color="green">已登录</Tag>
+                  </div>
+                ) : userBindings.github ? (
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center">
+                      <span className="text-white font-bold text-sm">G</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium text-slate-800">{userBindings.github.login}</div>
+                      <div className="text-sm text-slate-500">GitHub</div>
+                    </div>
+                    <Tag color="green">已登录</Tag>
+                  </div>
+                ) : (
+                  <div className="text-slate-500">未绑定任何账号</div>
+                )}
+              </div>
+            </div>
+
+            {/* 账号绑定管理 */}
+            <div>
+              <h4 className="text-sm font-medium text-slate-700 mb-3">绑定管理</h4>
+              <div className="space-y-3">
+                {/* 飞书 */}
+                <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded bg-blue-500 flex items-center justify-center">
+                      <span className="text-white font-bold text-xs">F</span>
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">飞书账号</div>
+                      {userBindings.feishu ? (
+                        <div className="text-xs text-slate-500">已绑定</div>
+                      ) : (
+                        <div className="text-xs text-slate-400">未绑定</div>
+                      )}
+                    </div>
+                  </div>
+                  {userBindings.feishu ? (
+                    <Button size="small" danger onClick={handleUnbindFeishu}>解绑</Button>
+                  ) : (
+                    <Button size="small" type="primary" onClick={handleBindFeishu}>绑定</Button>
+                  )}
+                </div>
+
+                {/* GitHub */}
+                <div className="flex items-center justify-between p-3 border border-slate-200 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded bg-slate-800 flex items-center justify-center">
+                      <span className="text-white font-bold text-xs">G</span>
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">GitHub 账号</div>
+                      {userBindings.github ? (
+                        <div className="text-xs text-slate-500">{userBindings.github.login}</div>
+                      ) : (
+                        <div className="text-xs text-slate-400">未绑定</div>
+                      )}
+                    </div>
+                  </div>
+                  {userBindings.github ? (
+                    <Button size="small" danger onClick={handleUnbindGitHub}>解绑</Button>
+                  ) : (
+                    <Button size="small" type="primary" onClick={handleBindGitHub}>绑定</Button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-100">
+              <p className="text-xs text-slate-400">
+                解绑操作需要管理员权限，如需解绑请联系管理员。
+              </p>
+            </div>
+          </div>
+        )}
+      </Modal>
     </>
   )
 }

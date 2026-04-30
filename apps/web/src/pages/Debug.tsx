@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 const API_BASE = 'http://localhost:3001'
 const USER_TOKEN_KEY = 'feishu_user_token'
 const USER_TOKEN_EXPIRES_KEY = 'feishu_user_token_expires'
+const USER_OPEN_ID_KEY = 'feishu_user_open_id'
 
 interface ApiResult {
   success?: boolean
@@ -21,6 +22,7 @@ export default function Debug() {
   // Token 状态
   const [userToken, setUserToken] = useState(() => localStorage.getItem(USER_TOKEN_KEY) || '')
   const [tokenExpires, setTokenExpires] = useState(() => localStorage.getItem(USER_TOKEN_EXPIRES_KEY) || '')
+  const [openId, setOpenId] = useState(() => localStorage.getItem(USER_OPEN_ID_KEY) || '')
   const [folderToken, setFolderToken] = useState('')
   const [documentId, setDocumentId] = useState('')
   const [manualCode, setManualCode] = useState('')
@@ -31,11 +33,108 @@ export default function Debug() {
   const [msgType, setMsgType] = useState<'text' | 'post' | 'interactive'>('text')
   const [messageContent, setMessageContent] = useState('')
 
+  // AI 生成状态
+  const [aiDocUrl, setAiDocUrl] = useState('')
+
+  // AI 生成代码
+  const handleAIGenerate = async () => {
+    if (!aiDocUrl) {
+      alert('请输入飞书文档 URL')
+      return
+    }
+
+    setLoading(true)
+    const start = Date.now()
+
+    try {
+      // 从 URL 中提取 wiki token
+      const cleanUrl = aiDocUrl.trim().replace(/\n/g, '')
+      const wikiMatch = cleanUrl.match(/\/wiki\/([a-zA-Z0-9]+)/)
+      
+      if (!wikiMatch) {
+        addResult('AI 生成', { error: `无法识别的 URL 格式。当前输入：${cleanUrl}` }, `${Date.now() - start}ms`)
+        setLoading(false)
+        return
+      }
+      
+      const documentId = wikiMatch[1]
+
+      // 1. 先获取 Wiki 节点信息
+      addResult('1. 获取 Wiki 节点', { message: '正在获取节点信息...' }, '0ms')
+
+      let docData: any
+
+      // wiki 知识库：先获取节点信息
+      let docRes = await fetch(`${API_BASE}/api/feishu/wiki-node?token=${documentId}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      docData = await docRes.json()
+
+      if (!docData.success || !docData.data) {
+        addResult('1. 获取 Wiki 节点', { error: docData.error || '获取 wiki 节点失败' }, `${Date.now() - start}ms`)
+        setLoading(false)
+        return
+      }
+
+      // 从 wiki 节点获取实际文档 ID
+      const wikiDocId = docData.data?.obj_token
+      if (!wikiDocId) {
+        addResult('1. 获取 Wiki 节点', { error: `无法获取文档 ID，返回数据：${JSON.stringify(docData.data)}` }, `${Date.now() - start}ms`)
+        setLoading(false)
+        return
+      }
+
+      // 2. 获取文档内容
+      addResult('2. 获取文档内容', { message: '正在获取文档内容...' }, '')
+
+      docRes = await fetch(`${API_BASE}/api/ai/get-document-content`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document_id: wikiDocId }),
+      })
+      docData = await docRes.json()
+
+      if (docData.code !== 200) {
+        addResult('2. 获取文档内容', { error: docData.msg || '获取失败' }, `${Date.now() - start}ms`)
+        setLoading(false)
+        return
+      }
+
+      const docContent = docData.data?.content || ''
+      addResult('2. 获取文档内容', { success: true, message: `获取成功，文档长度：${docContent.length} 字符` }, `${Date.now() - start}ms`)
+
+      // 3. 调用 AI 生成代码
+      addResult('3. AI 生成代码', { message: '正在调用 AI 生成...' }, '')
+
+      // 调用 TS 后端的 AI 接口
+      const aiRes = await fetch(`${API_BASE}/api/ai/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          message: '请根据文档内容生成代码实现',
+          document_content: docContent,
+          user_token: userToken,
+          open_id: openId
+        }),
+      })
+      const aiData = await aiRes.json()
+
+      addResult('3. AI 生成代码', aiData, `${Date.now() - start}ms`)
+
+    } catch (err) {
+      addResult('AI 生成', { error: String(err) }, `${Date.now() - start}ms`)
+    }
+
+    setLoading(false)
+  }
+
   // 检查 URL 中的 token 参数（OAuth 回调）
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const token = params.get('token')
     const expiresAt = params.get('expires_at')
+    const openIdParam = params.get('open_id')
     const error = params.get('error')
 
     if (token) {
@@ -45,9 +144,13 @@ export default function Debug() {
         setTokenExpires(expiresAt)
         localStorage.setItem(USER_TOKEN_EXPIRES_KEY, expiresAt)
       }
+      if (openIdParam) {
+        setOpenId(openIdParam)
+        localStorage.setItem(USER_OPEN_ID_KEY, openIdParam)
+      }
       // 清除 URL 参数
       window.history.replaceState({}, '', '/debug')
-      addResult('OAuth 回调', { success: true, data: { message: 'Token 已获取并保存' } }, '自动')
+      addResult('OAuth 回调', { success: true, data: { message: 'Token 已获取并保存', open_id: openIdParam } }, '自动')
     } else if (error) {
       addResult('OAuth 回调', { success: false, error: `错误: ${error}` }, '自动')
       window.history.replaceState({}, '', '/debug')
@@ -97,9 +200,13 @@ export default function Debug() {
       if (data.success && data.data?.user_token) {
         setUserToken(data.data.user_token)
         setTokenExpires(data.data.expires_at || '')
+        setOpenId(data.data.open_id || '')
         localStorage.setItem(USER_TOKEN_KEY, data.data.user_token)
         if (data.data.expires_at) {
           localStorage.setItem(USER_TOKEN_EXPIRES_KEY, data.data.expires_at)
+        }
+        if (data.data.open_id) {
+          localStorage.setItem(USER_OPEN_ID_KEY, data.data.open_id)
         }
         setManualCode('')
       }
@@ -311,7 +418,7 @@ export default function Debug() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="bg-gray-50 p-6" style={{ minHeight: '100vh', overflowY: 'auto' }}>
       <div className="max-w-6xl mx-auto">
         <h1 className="text-2xl font-bold text-gray-800 mb-6">🔧 TS 后端接口调试</h1>
 
@@ -570,6 +677,61 @@ export default function Debug() {
             title={!documentId ? '请输入 Document ID' : !userToken ? '请先获取 Token' : ''}
           >
             获取文档纯文本内容
+          </button>
+        </div>
+
+        {/* 文件夹元数据 */}
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <h2 className="font-semibold text-gray-700 mb-3">📁 文件夹元数据</h2>
+          <p className="text-sm text-gray-600 mb-3">根据文件夹 token 获取文件夹的元数据（ID、名称、创建者等）</p>
+          <div className="flex items-center gap-4 mb-3">
+            <input
+              type="text"
+              value={folderToken}
+              onChange={e => setFolderToken(e.target.value)}
+              placeholder="输入文件夹 token"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            />
+            <button
+              onClick={() => {
+                if (!folderToken) {
+                  alert('请输入文件夹 token')
+                  return
+                }
+                callGetApi('/api/feishu/folder-meta', {
+                  folder_token: folderToken,
+                  user_token: userToken,
+                })
+              }}
+              disabled={loading || !folderToken}
+              className="px-6 py-2 bg-teal-500 text-white rounded hover:bg-teal-600 disabled:opacity-50 transition"
+              title={!folderToken ? '请输入文件夹 token' : ''}
+            >
+              {loading ? '获取中...' : '获取文件夹元数据'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">提示：folder_token 从云盘文件夹 URL 中获取，格式为 https://feishu.cn/drive/folder/{'{folder_token}'}</p>
+        </div>
+
+        {/* AI 文档内容获取 */}
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <h2 className="font-semibold text-gray-700 mb-3">🤖 AI 文档生成代码</h2>
+          <p className="text-sm text-gray-600 mb-3">输入飞书文档 URL，AI 自动读取文档并根据文档需求生成代码</p>
+          <div className="mb-3">
+            <textarea
+              value={aiDocUrl}
+              onChange={e => setAiDocUrl(e.target.value)}
+              placeholder="输入飞书文档 URL，例如：https://feishu.cn/docx/doxbcmEtbxxx"
+              rows={2}
+              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+            />
+          </div>
+          <button
+            onClick={handleAIGenerate}
+            disabled={loading || !aiDocUrl}
+            className="px-6 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-50 transition"
+          >
+            {loading ? '生成中...' : '🚀 开始生成'}
           </button>
         </div>
 

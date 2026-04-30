@@ -1,13 +1,12 @@
 ﻿import { useEffect, useState } from 'react'
-import { Card, Empty, List, Tag, Button, message, Space, Typography, Collapse, Table, Modal, Input } from 'antd'
-import { ArrowLeftOutlined, FolderOutlined, LinkOutlined, FileTextOutlined, ApiOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons'
+import { Card, Empty, List, Tag, Button, message, Space, Typography, Collapse, Table, Modal, Input, Checkbox, Pagination } from 'antd'
+import { ArrowLeftOutlined, FolderOutlined, LinkOutlined, FileTextOutlined, ApiOutlined, PlusOutlined, EditOutlined, GithubOutlined } from '@ant-design/icons'
 import Sidebar from '../components/Sidebar'
 import { useNavigate } from '@tanstack/react-router'
 
 const { Title, Text, Paragraph } = Typography
 const { Panel } = Collapse
 
-const sidebarWidth = 80
 const mainMarginLeft = 336
 const API_BASE = ''
 
@@ -17,8 +16,19 @@ interface Project {
   description: string
   swaggerUrl: string
   docUrls: string[]
+  githubRepo: string
+  githubRepos: string[]  // 多个仓库
   createdAt: string
   updatedAt: string
+}
+
+interface GitHubRepo {
+  id: number
+  name: string
+  full_name: string
+  private: boolean
+  html_url: string
+  description: string
 }
 
 interface OpenAPISpec {
@@ -68,6 +78,78 @@ export default function Assets() {
   const [editingProject, setEditingProject] = useState(false)
   const [editingTitle, setEditingTitle] = useState('')
   const [editingDesc, setEditingDesc] = useState('')
+  const [editingGitHubRepos, setEditingGitHubRepos] = useState<string[]>([])
+  const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([])
+  const [githubReposLoading, setGithubReposLoading] = useState(false)
+  const [githubReposModalVisible, setGithubReposModalVisible] = useState(false)
+  const [githubReposPage, setGithubReposPage] = useState(1)
+  const githubReposPageSize = 10
+
+  // 加载 GitHub 仓库列表
+  const loadGitHubRepos = async () => {
+    setGithubReposLoading(true)
+    try {
+      const res = await fetch('/api/github/repos', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setGithubRepos(data.data || [])
+      } else {
+        message.error('获取 GitHub 仓库失败，请确保已绑定 GitHub 账号')
+      }
+    } catch (err) {
+      console.error('加载 GitHub 仓库失败:', err)
+      message.error('获取 GitHub 仓库失败')
+    } finally {
+      setGithubReposLoading(false)
+    }
+  }
+
+  // 打开 GitHub 仓库选择弹窗
+  const openGitHubRepoSelector = async () => {
+    setGithubReposPage(1)
+    await loadGitHubRepos()
+    setGithubReposModalVisible(true)
+  }
+
+  // 打开 GitHub 仓库编辑器（从关联仓库卡片）
+  const openGitHubRepoEditor = async () => {
+    if (selectedProject) {
+      const repos = selectedProject.githubRepo ? selectedProject.githubRepo.split(',').filter(Boolean) : []
+      setEditingGitHubRepos(repos)
+    }
+    await openGitHubRepoSelector()
+  }
+
+  // 切换仓库选择
+  const toggleGitHubRepo = (repoFullName: string) => {
+    setEditingGitHubRepos(prev =>
+      prev.includes(repoFullName)
+        ? prev.filter(r => r !== repoFullName)
+        : [...prev, repoFullName]
+    )
+  }
+
+  // 确认选择
+  const confirmGitHubRepos = async () => {
+    if (!selectedProject) return
+    
+    const newGitHubRepo = editingGitHubRepos.join(',')
+    try {
+      const res = await fetch(`/api/projects/${selectedProject.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ github_repo: newGitHubRepo })
+      })
+      if (res.ok) {
+        setSelectedProject({ ...selectedProject, githubRepo: newGitHubRepo })
+        setGithubReposModalVisible(false)
+        message.success('仓库绑定已更新')
+      }
+    } catch (err) {
+      console.error('保存失败:', err)
+      message.error('保存失败')
+    }
+  }
 
   // 进入编辑模式
   const startEdit = () => {
@@ -121,6 +203,7 @@ export default function Assets() {
             description: p.Description || p.description || '',
             swaggerUrl: p.SwaggerURL || p.swaggerUrl || `${window.location.origin}/swagger?projectId=${p.ID || p.id}`,
             docUrls: p.DocUrls || p.docUrls ? JSON.parse(p.DocUrls || p.docUrls) : [],
+            githubRepo: p.GitHubRepo || p.githubRepo || '',
             createdAt: p.CreatedAt || p.createdAt,
             updatedAt: p.UpdatedAt || p.updatedAt,
           }))
@@ -417,6 +500,49 @@ export default function Assets() {
         )}
       </Card>
 
+      {/* 关联仓库 */}
+      <Card 
+        title="关联仓库" 
+        className="mb-4"
+        extra={
+          <Button icon={<EditOutlined />} size="small" onClick={openGitHubRepoEditor}>
+            编辑
+          </Button>
+        }
+      >
+        {selectedProject?.githubRepo ? (
+          <List
+            dataSource={selectedProject.githubRepo.split(',').filter(Boolean)}
+            renderItem={(repo: string) => (
+              <List.Item 
+                actions={[
+                  <Button 
+                    key="open" 
+                    icon={<GithubOutlined />} 
+                    href={`https://github.com/${repo}`} 
+                    target="_blank"
+                  >
+                    打开
+                  </Button>
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={<GithubOutlined style={{ fontSize: 20, color: '#333' }} />}
+                  title={
+                    <a href={`https://github.com/${repo}`} target="_blank">
+                      {repo}
+                    </a>
+                  }
+                  description={`https://github.com/${repo}`}
+                />
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty description="暂无关联仓库" />
+        )}
+      </Card>
+
       {/* 选中的API 详情 */}
       {specs.length > 0 && (
         <Card title="接口详情" className="mb-4">
@@ -461,6 +587,58 @@ export default function Assets() {
             style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 4 }}
           />
         </div>
+      </Modal>
+
+      {/* GitHub 仓库选择弹窗 */}
+      <Modal
+        title="选择 GitHub 仓库"
+        open={githubReposModalVisible}
+        onCancel={() => setGithubReposModalVisible(false)}
+        footer={null}
+        width={600}
+      >
+        {githubRepos.length === 0 ? (
+          <Empty description={githubReposLoading ? '加载中...' : '暂无仓库或尚未绑定 GitHub 账号'} />
+        ) : (
+          <div>
+            <List
+              dataSource={githubRepos.slice((githubReposPage - 1) * githubReposPageSize, githubReposPage * githubReposPageSize)}
+              renderItem={(repo: GitHubRepo) => (
+                <List.Item>
+                  <Checkbox
+                    checked={editingGitHubRepos.includes(repo.full_name)}
+                    onChange={() => toggleGitHubRepo(repo.full_name)}
+                    className="w-full"
+                  >
+                    <div className="flex items-center gap-2">
+                      <GithubOutlined />
+                      <span className="font-medium">{repo.full_name}</span>
+                      {repo.private && <Tag color="orange">私有</Tag>}
+                    </div>
+                    {repo.description && (
+                      <div className="text-xs text-gray-500 mt-1">{repo.description}</div>
+                    )}
+                  </Checkbox>
+                </List.Item>
+              )}
+            />
+            {githubRepos.length > githubReposPageSize && (
+              <div className="flex justify-center mt-4">
+                <Pagination
+                  current={githubReposPage}
+                  pageSize={githubReposPageSize}
+                  total={githubRepos.length}
+                  onChange={(page: number) => setGithubReposPage(page)}
+                  size="small"
+                />
+              </div>
+            )}
+            <div className="flex justify-end gap-2 mt-4">
+              <Button onClick={() => setGithubReposModalVisible(false)}>取消</Button>
+              <Button type="primary" onClick={confirmGitHubRepos}>确定</Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

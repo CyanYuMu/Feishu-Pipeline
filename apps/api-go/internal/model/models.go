@@ -276,6 +276,11 @@ type User struct {
 	AvatarURL    string   `gorm:"size:512"`
 	Role         Role     `gorm:"size:32;not null"`
 	Departments  []string `gorm:"serializer:json"`
+	// GitHub 绑定信息
+	GitHubID          string `gorm:"size:64"`
+	GitHubLogin       string `gorm:"size:128"`
+	GitHubAvatar      string `gorm:"size:512"`
+	GitHubAccessToken string `gorm:"type:text"` // 用于调用 GitHub API
 	BaseModel
 }
 
@@ -395,10 +400,25 @@ type MessageDelivery struct {
 	CreatedAt  time.Time `gorm:"autoCreateTime"`
 }
 
+// Project 项目 - 汇总多个 API 文档到一个 Swagger UI
+type Project struct {
+	ID          string `gorm:"primaryKey;size:128"`
+	Title       string `gorm:"size:255;not null"`
+	Description string `gorm:"size:1024"`
+	SwaggerURL  string `gorm:"size:512"` // 汇总后的 Swagger UI URL
+	DocUrls     string `gorm:"type:text"` // JSON array of document URLs
+	GitHubRepo  string `gorm:"size:512"` // 关联的 GitHub 仓库，多个用逗号分隔，格式：owner/repo1,owner/repo2
+	BaseModel
+}
+
+// OpenAPISpec API 文档 - 属于某个项目
 type OpenAPISpec struct {
-	ID        string `gorm:"primaryKey;size:128"`
-	Title     string `gorm:"size:255"`
-	SpecJSON  string `gorm:"type:text;not null"`
+	ID         string `gorm:"primaryKey;size:128"`
+	ProjectID  string `gorm:"size:128;index"` // 所属项目
+	Title      string `gorm:"size:255"`
+	Description string `gorm:"size:1024"`
+	SpecJSON   string `gorm:"type:text;not null"`
 	SwaggerURL string `gorm:"size:512"`
+	DocUrls    string `gorm:"type:text"` // JSON array of document URLs
 	BaseModel
 }
