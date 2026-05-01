@@ -59,6 +59,52 @@ definitions:
     required:
     - code
     type: object
+  authtype.LoginResponse:
+    properties:
+      user:
+        $ref: '#/definitions/authtype.UserResponse'
+    type: object
+  authtype.UserResponse:
+    properties:
+      avatarUrl:
+        type: string
+      departments:
+        items:
+          type: string
+        type: array
+      email:
+        type: string
+      feishuOpenID:
+        type: string
+      githubAvatar:
+        type: string
+      githubId:
+        description: GitHub 绑定信息
+        type: string
+      githubLogin:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      role:
+        $ref: '#/definitions/model.Role'
+    type: object
+  controller.SaveSpecRequest:
+    properties:
+      description:
+        type: string
+      doc_urls:
+        type: string
+      project_id:
+        type: string
+      spec_json:
+        type: string
+      title:
+        type: string
+    required:
+    - spec_json
+    type: object
   model.AgentRunStatus:
     enum:
     - pending
@@ -666,6 +712,21 @@ definitions:
       comment:
         type: string
     type: object
+  service.GitHubRepo:
+    properties:
+      description:
+        type: string
+      full_name:
+        type: string
+      html_url:
+        type: string
+      id:
+        type: integer
+      name:
+        type: string
+      private:
+        type: boolean
+    type: object
   sessiontype.CreateMessageRequest:
     properties:
       content:
@@ -779,6 +840,140 @@ paths:
       summary: 飞书 SSO 登录
       tags:
       - 认证
+  /api/auth/github/authorize:
+    get:
+      description: 构建 GitHub OAuth 授权 URL 并重定向
+      parameters:
+      - description: 状态参数，用于 CSRF 防护
+        in: query
+        name: state
+        required: true
+        type: string
+      - description: 授权成功后的重定向 URL
+        in: query
+        name: redirect
+        type: string
+      responses:
+        "302":
+          description: 重定向到 GitHub 授权页面
+          schema:
+            type: string
+      summary: GitHub OAuth 授权跳转
+      tags:
+      - 认证
+  /api/auth/github/bind:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 'json入参: code'
+        in: body
+        name: req
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/authtype.UserResponse'
+      summary: 为当前用户绑定 GitHub 账号
+      tags:
+      - 认证
+  /api/auth/github/callback:
+    get:
+      description: 接收 GitHub OAuth 授权码，交换 access_token，创建登录会话，然后重定向到前端
+      parameters:
+      - description: GitHub 授权码
+        in: query
+        name: code
+        required: true
+        type: string
+      - description: 状态参数
+        in: query
+        name: state
+        type: string
+      - description: 授权成功后的重定向 URL
+        in: query
+        name: redirect
+        type: string
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: 重定向到前端页面
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: GitHub OAuth 回调
+      tags:
+      - 认证
+  /api/auth/github/config:
+    get:
+      produces:
+      - application/json
+      responses: {}
+      summary: 获取 GitHub OAuth 前端配置
+      tags:
+      - 认证
+  /api/auth/github/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: 'json入参: code, user_id, name, email, avatar'
+        in: body
+        name: req
+        required: true
+        schema:
+          additionalProperties:
+            type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/authtype.LoginResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: GitHub OAuth 登录
+      tags:
+      - 认证
+  /api/auth/github/unbind:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: 解绑当前用户的 GitHub 账号
+      tags:
+      - 认证
   /api/auth/logout:
     post:
       produces:
@@ -875,6 +1070,20 @@ paths:
       summary: 获取单个交付记录详情
       tags:
       - Pipeline
+  /api/github/repos:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/service.GitHubRepo'
+            type: array
+      summary: 获取当前用户绑定的 GitHub 仓库列表
+      tags:
+      - 认证
   /api/health:
     get:
       produces:
@@ -891,6 +1100,37 @@ paths:
       summary: 当前登录用户信息
       tags:
       - 认证
+  /api/openapi/specs:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: OpenAPI 规范请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/controller.SaveSpecRequest'
+      produces:
+      - application/json
+      responses: {}
+      summary: 保存 OpenAPI 规范
+      tags:
+      - OpenAPI
+  /api/openapi/specs/:specId:
+    get:
+      parameters:
+      - description: Spec ID
+        in: path
+        name: specId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses: {}
+      summary: 获取 OpenAPI 规范
+      tags:
+      - OpenAPI
   /api/pipeline-runs:
     get:
       description: 按创建时间倒序返回 PipelineRun 列表。前端工作台可用该接口展示所有研发流水线运行记录、当前阶段、运行状态、目标仓库和工作分支。

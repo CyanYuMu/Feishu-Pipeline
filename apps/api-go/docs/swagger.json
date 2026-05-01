@@ -134,6 +134,212 @@
                 "responses": {}
             }
         },
+        "/api/auth/github/authorize": {
+            "get": {
+                "description": "构建 GitHub OAuth 授权 URL 并重定向",
+                "tags": [
+                    "认证"
+                ],
+                "summary": "GitHub OAuth 授权跳转",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "状态参数，用于 CSRF 防护",
+                        "name": "state",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "授权成功后的重定向 URL",
+                        "name": "redirect",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "重定向到 GitHub 授权页面",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/github/bind": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "为当前用户绑定 GitHub 账号",
+                "parameters": [
+                    {
+                        "description": "json入参: code",
+                        "name": "req",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/authtype.UserResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/github/callback": {
+            "get": {
+                "description": "接收 GitHub OAuth 授权码，交换 access_token，创建登录会话，然后重定向到前端",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "GitHub OAuth 回调",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "GitHub 授权码",
+                        "name": "code",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "状态参数",
+                        "name": "state",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "授权成功后的重定向 URL",
+                        "name": "redirect",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "302": {
+                        "description": "重定向到前端页面",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/github/config": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "获取 GitHub OAuth 前端配置",
+                "responses": {}
+            }
+        },
+        "/api/auth/github/login": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "GitHub OAuth 登录",
+                "parameters": [
+                    {
+                        "description": "json入参: code, user_id, name, email, avatar",
+                        "name": "req",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/authtype.LoginResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/auth/github/unbind": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "解绑当前用户的 GitHub 账号",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/auth/logout": {
             "post": {
                 "produces": [
@@ -275,6 +481,28 @@
                 }
             }
         },
+        "/api/github/repos": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "认证"
+                ],
+                "summary": "获取当前用户绑定的 GitHub 仓库列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/service.GitHubRepo"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/health": {
             "get": {
                 "produces": [
@@ -296,6 +524,53 @@
                     "认证"
                 ],
                 "summary": "当前登录用户信息",
+                "responses": {}
+            }
+        },
+        "/api/openapi/specs": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "OpenAPI"
+                ],
+                "summary": "保存 OpenAPI 规范",
+                "parameters": [
+                    {
+                        "description": "OpenAPI 规范请求",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controller.SaveSpecRequest"
+                        }
+                    }
+                ],
+                "responses": {}
+            }
+        },
+        "/api/openapi/specs/:specId": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "OpenAPI"
+                ],
+                "summary": "获取 OpenAPI 规范",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Spec ID",
+                        "name": "specId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {}
             }
         },
@@ -1134,6 +1409,76 @@
             ],
             "properties": {
                 "code": {
+                    "type": "string"
+                }
+            }
+        },
+        "authtype.LoginResponse": {
+            "type": "object",
+            "properties": {
+                "user": {
+                    "$ref": "#/definitions/authtype.UserResponse"
+                }
+            }
+        },
+        "authtype.UserResponse": {
+            "type": "object",
+            "properties": {
+                "avatarUrl": {
+                    "type": "string"
+                },
+                "departments": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "email": {
+                    "type": "string"
+                },
+                "feishuOpenID": {
+                    "type": "string"
+                },
+                "githubAvatar": {
+                    "type": "string"
+                },
+                "githubId": {
+                    "description": "GitHub 绑定信息",
+                    "type": "string"
+                },
+                "githubLogin": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "role": {
+                    "$ref": "#/definitions/model.Role"
+                }
+            }
+        },
+        "controller.SaveSpecRequest": {
+            "type": "object",
+            "required": [
+                "spec_json"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "doc_urls": {
+                    "type": "string"
+                },
+                "project_id": {
+                    "type": "string"
+                },
+                "spec_json": {
+                    "type": "string"
+                },
+                "title": {
                     "type": "string"
                 }
             }
@@ -2021,6 +2366,29 @@
             "properties": {
                 "comment": {
                     "type": "string"
+                }
+            }
+        },
+        "service.GitHubRepo": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "full_name": {
+                    "type": "string"
+                },
+                "html_url": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "private": {
+                    "type": "boolean"
                 }
             }
         },
