@@ -69,6 +69,7 @@ func New(deps Dependencies) *gin.Engine {
 	authenticated.GET("/pipeline-runs/:id/current", deps.PipelineController.GetRunCurrent)
 	authenticated.GET("/pipeline-runs/:id/stages", deps.PipelineController.ListStages)
 	authenticated.GET("/pipeline-runs/:id/artifacts", deps.PipelineController.ListArtifacts)
+	authenticated.GET("/pipeline-runs/:id/code-diff", deps.PipelineController.GetCodeDiff)
 	authenticated.GET("/pipeline-runs/:id/checkpoints", deps.PipelineController.ListCheckpoints)
 	authenticated.GET("/pipeline-runs/:id/agent-runs", deps.PipelineController.ListAgentRuns)
 	authenticated.GET("/pipeline-runs/:id/deliveries", deps.PipelineController.ListGitDeliveries)

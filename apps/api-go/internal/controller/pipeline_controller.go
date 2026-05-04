@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -211,6 +212,54 @@ func (c *PipelineController) ListArtifacts(ctx *gin.Context) {
 		response = append(response, pipelinetype.NewArtifactResponse(item))
 	}
 	writeSuccess(ctx, http.StatusOK, pipelinetype.RunArtifactListResponse{Artifacts: response})
+}
+
+// GetCodeDiff
+// @tags Pipeline
+// @summary 获取流水线的代码变更集
+// @description 返回指定 PipelineRun 最新的代码变更计划，包含结构化的changeSet、标准git格式diff和变更摘要。
+// @router /api/pipeline-runs/{id}/code-diff [GET]
+// @produce application/json
+// @param id path string true "流水线运行ID"
+// @success 200 {object} object{changeSet=[]map[string]any, summary=string, updatedAt=time.Time}
+// @failure 404 {object} pipelinetype.ErrorEnvelope
+// @failure 500 {object} pipelinetype.ErrorEnvelope
+func (c *PipelineController) GetCodeDiff(ctx *gin.Context) {
+	runID := ctx.Param("id")
+
+	// 获取该流水线的所有产物
+	artifacts, err := c.pipelineService.ListArtifacts(ctx.Request.Context(), runID)
+	if err != nil {
+		writeError(ctx, http.StatusInternalServerError, err)
+		return
+	}
+
+	// 找到最新的code_diff类型产物
+	var codeDiffArtifact *model.Artifact
+	for i := len(artifacts) - 1; i >= 0; i-- {
+		if artifacts[i].ArtifactType == model.ArtifactCodeDiff {
+			codeDiffArtifact = &artifacts[i]
+			break
+		}
+	}
+
+	if codeDiffArtifact == nil {
+		writeError(ctx, http.StatusNotFound, errors.New("未找到代码变更记录"))
+		return
+	}
+
+	// 解析结构化内容
+	var content map[string]any
+	if err := json.Unmarshal([]byte(codeDiffArtifact.ContentJSON), &content); err != nil {
+		writeError(ctx, http.StatusInternalServerError, errors.New("解析变更内容失败"))
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"changeSet": content["changeSet"],
+		"summary":   codeDiffArtifact.ContentText,
+		"updatedAt": codeDiffArtifact.UpdatedAt,
+	})
 }
 
 // ListCheckpoints
@@ -435,13 +484,13 @@ func (c *PipelineController) ExecuteChanges(ctx *gin.Context) {
 	changeSet := make([]map[string]any, 0, len(req.ChangeSet))
 	for _, item := range req.ChangeSet {
 		changeSet = append(changeSet, map[string]any{
-			"filePath":         item.FilePath,
-			"changeType":       item.ChangeType,
-			"reason":           item.Reason,
-			"proposedPatch":    item.ProposedPatch,
-			"contextIncluded":  item.ContextIncluded,
-			"originalContent":  item.OriginalContent,
-			"proposedDiff":     item.ProposedDiff,
+			"filePath":        item.FilePath,
+			"changeType":      item.ChangeType,
+			"reason":          item.Reason,
+			"proposedPatch":   item.ProposedPatch,
+			"contextIncluded": item.ContextIncluded,
+			"originalContent": item.OriginalContent,
+			"proposedDiff":    item.ProposedDiff,
 		})
 	}
 	params := service.ExecuteChangesParams{

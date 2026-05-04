@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"feishu-pipeline/apps/api-go/internal/external"
+	"feishu-pipeline/apps/api-go/internal/external/feishu"
 	"feishu-pipeline/apps/api-go/internal/job"
 	"feishu-pipeline/apps/api-go/internal/model"
 	"feishu-pipeline/apps/api-go/internal/pipeline"
@@ -20,9 +21,10 @@ type PipelineQueue interface {
 }
 
 type PipelineService struct {
-	repository *repo.Repository
-	engine     *pipeline.Engine
-	queue      PipelineQueue
+	repository   *repo.Repository
+	engine       *pipeline.Engine
+	queue        PipelineQueue
+	feishuClient *feishu.Client
 }
 
 type PipelineServiceOption func(*PipelineService)
@@ -30,7 +32,7 @@ type PipelineServiceOption func(*PipelineService)
 func WithPipelineExecutor(executor pipeline.Executor) PipelineServiceOption {
 	return func(service *PipelineService) {
 		if executor != nil {
-			service.engine = pipeline.NewEngine(service.repository, executor)
+			service.engine = pipeline.NewEngine(service.repository, executor, service.feishuClient)
 		}
 	}
 }
@@ -87,10 +89,11 @@ type CreatePipelineRunInput struct {
 	SelectedDocUrls []string
 }
 
-func NewPipelineService(repository *repo.Repository, options ...PipelineServiceOption) *PipelineService {
+func NewPipelineService(repository *repo.Repository, feishuClient *feishu.Client, options ...PipelineServiceOption) *PipelineService {
 	service := &PipelineService{
-		repository: repository,
-		engine:     pipeline.NewEngine(repository, pipeline.NewSequentialExecutor(pipeline.WithAgentRunner(pipeline.NewAgentRunner(nil, pipeline.DefaultPromptRegistry())))),
+		repository:   repository,
+		feishuClient: feishuClient,
+		engine:       pipeline.NewEngine(repository, pipeline.NewSequentialExecutor(pipeline.WithAgentRunner(pipeline.NewAgentRunner(nil, pipeline.DefaultPromptRegistry()))), feishuClient),
 	}
 	for _, option := range options {
 		option(service)
@@ -704,7 +707,7 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 	changedFilesJSON, _ := json.Marshal(result.AppliedFiles)
 	delivery := model.GitDelivery{
 		ID:               utils.NewID("delivery"),
-		PipelineRunID:     runID,
+		PipelineRunID:    runID,
 		Provider:         "github",
 		Repo:             run.TargetRepo,
 		BaseBranch:       run.TargetBranch,
@@ -742,6 +745,6 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 	return &ExecuteChangesResult{
 		AppliedFiles: result.AppliedFiles,
 		FailedFiles:  result.FailedFiles,
-		Summary:     result.Summary,
+		Summary:      result.Summary,
 	}, nil
 }

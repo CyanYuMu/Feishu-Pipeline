@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"feishu-pipeline/apps/api-go/internal/external"
 	"feishu-pipeline/apps/api-go/internal/model"
@@ -22,27 +25,44 @@ func NewCodeGenerationHandler(githubService *external.GitHubService) *CodeGenera
 func (h *CodeGenerationHandler) Execute(_ context.Context, ctx StageContext) (StageExecutionResult, error) {
 	impactFiles := nestedStringSlice(ctx.Input, "latestArtifacts", model.ArtifactSolutionDesign, SchemaFieldImpactFiles)
 
-	// 如果有 GitHub 服务，尝试读取仓库上下文
+	// 读取仓库上下文
 	var repoContext []map[string]any
-	if h.githubService != nil && ctx.Run.TargetRepo != "" && ctx.Run.TargetRepo != "self" {
+	if ctx.Run.TargetRepo == "self" || ctx.Run.TargetRepo == "" {
+		// 本地代码库上下文
+		repoContext = h.buildLocalRepoContext(ctx)
+	} else if h.githubService != nil {
+		// 远程GitHub仓库上下文
 		repoContext = h.buildRepoContext(ctx)
 	}
 
+	// 如果没有指定影响文件，从上下文提取或使用默认值
 	if len(impactFiles) == 0 {
-		impactFiles = []string{"apps/api-go/internal/pipeline/executor.go", "apps/api-go/internal/service/pipeline_service.go"}
+		if len(repoContext) > 0 {
+			// 从上下文提取前几个文件作为影响文件
+			for _, f := range repoContext {
+				if path, ok := f["path"].(string); ok {
+					impactFiles = append(impactFiles, path)
+				}
+				if len(impactFiles) >= 3 {
+					break
+				}
+			}
+		} else {
+			impactFiles = []string{"apps/api-go/internal/pipeline/executor.go", "apps/api-go/internal/service/pipeline_service.go"}
+		}
 	}
 
 	changeSet := h.buildChangeSetWithContext(impactFiles, repoContext, ctx.Run.RequirementText)
 	patches := make([]map[string]any, 0, len(changeSet))
 	for _, item := range changeSet {
 		patches = append(patches, map[string]any{
-			"filePath":         item["filePath"],
-			"changeType":       item["changeType"],
-			"patch":            item["proposedPatch"],
-			"reason":           item["reason"],
-			"contextIncluded":  item["contextIncluded"],
-			"originalContent":  item["originalContent"],
-			"proposedDiff":     item["proposedDiff"],
+			"filePath":        item["filePath"],
+			"changeType":      item["changeType"],
+			"patch":           item["proposedPatch"],
+			"reason":          item["reason"],
+			"contextIncluded": item["contextIncluded"],
+			"originalContent": item["originalContent"],
+			"proposedDiff":    item["proposedDiff"],
 		})
 	}
 
@@ -63,7 +83,78 @@ func (h *CodeGenerationHandler) Execute(_ context.Context, ctx StageContext) (St
 	return newStageResult(model.ArtifactCodeDiff, "代码变更计划", payload, formatChangeSet(ctx.Run.WorkBranch, changeSet)), nil
 }
 
-// buildRepoContext 构建仓库上下文
+// buildLocalRepoContext 构建本地代码库上下文
+func (h *CodeGenerationHandler) buildLocalRepoContext(ctx StageContext) []map[string]any {
+	var contextFiles []map[string]any
+	rootDir, err := os.Getwd() // 获取当前工作目录（项目根目录）
+	if err != nil {
+		return contextFiles
+	}
+
+	keywords := extractKeywords(ctx.Run.RequirementText)
+	// 遍历项目目录，最多递归5层
+	err = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// 跳过目录、非代码文件、隐藏目录和依赖目录
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if strings.HasPrefix(base, ".") || base == "node_modules" || base == "vendor" || base == "dist" || base == "build" {
+				return filepath.SkipDir
+			}
+			// 限制递归深度
+			rel, _ := filepath.Rel(rootDir, path)
+			if rel != "." && strings.Count(rel, string(os.PathSeparator)) >= 5 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !isCodeFile(info.Name()) {
+			return nil
+		}
+
+		// 匹配关键词
+		relPath, err := filepath.Rel(rootDir, path)
+		if err != nil {
+			return nil
+		}
+		shouldInclude := len(keywords) == 0 // 无关键词时包含所有文件
+		if !shouldInclude {
+			for _, kw := range keywords {
+				if strings.Contains(strings.ToLower(relPath), strings.ToLower(kw)) ||
+					strings.Contains(strings.ToLower(info.Name()), strings.ToLower(kw)) {
+					shouldInclude = true
+					break
+				}
+			}
+		}
+
+		if shouldInclude {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			contextFiles = append(contextFiles, map[string]any{
+				"path":    relPath,
+				"name":    info.Name(),
+				"content": truncateContent(string(content), 500),
+				"local":   true,
+			})
+
+			if len(contextFiles) >= 10 {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("buildLocalRepoContext error: %v\n", err)
+	}
+	return contextFiles
+}
+
+// buildRepoContext 构建远程GitHub仓库上下文
 func (h *CodeGenerationHandler) buildRepoContext(ctx StageContext) []map[string]any {
 	var contextFiles []map[string]any
 
@@ -110,6 +201,7 @@ func (h *CodeGenerationHandler) buildRepoContext(ctx StageContext) []map[string]
 				"name":    file.Name,
 				"content": truncateContent(content, 500),
 				"sha":     sha,
+				"local":   false,
 			})
 
 			if len(contextFiles) >= 10 {
@@ -133,21 +225,31 @@ func (h *CodeGenerationHandler) buildChangeSetWithContext(impactFiles []string, 
 		}
 	}
 
+	// 读取本地文件的完整内容（如果存在）
 	for _, file := range impactFiles {
-		changeType := changeTypeForPath(file)
-		proposedPatch := generatePatchSummary(file, ctxMap[file], requirement)
-
-		item := map[string]any{
-			"filePath":         file,
-			"changeType":       changeType,
-			"reason":           proposedPatchSummary(file),
-			"proposedPatch":    proposedPatch,
-			"contextIncluded":  ctxMap[file] != "",
+		// 尝试读取本地完整文件内容
+		fullContent, err := os.ReadFile(file)
+		var originalContent string
+		if err == nil {
+			originalContent = string(fullContent)
+		} else if ctxMap[file] != "" {
+			originalContent = ctxMap[file]
+		} else {
+			originalContent = "// 无法获取文件内容"
 		}
 
-		if originalContent, ok := ctxMap[file]; ok {
-			item["originalContent"] = originalContent
-			item["proposedDiff"] = generateDiff(originalContent, proposedPatch)
+		changeType := changeTypeForPath(file)
+		proposedPatch := generateProposedPatch(file, originalContent, requirement)
+		diff := generateGitDiff(file, originalContent, proposedPatch)
+
+		item := map[string]any{
+			"filePath":        file,
+			"changeType":      changeType,
+			"reason":          proposedPatchSummary(file),
+			"proposedPatch":   proposedPatch,
+			"originalContent": originalContent,
+			"proposedDiff":    diff,
+			"contextIncluded": originalContent != "// 无法获取文件内容",
 		}
 
 		changeSet = append(changeSet, item)
@@ -203,33 +305,176 @@ func truncateContent(content string, maxLines int) string {
 	return strings.Join(lines[:maxLines], "\n") + "\n... (内容已截断)"
 }
 
-func generatePatchSummary(filePath, originalContent, requirement string) string {
-	if strings.Contains(filePath, "executor") {
-		return "重构阶段执行逻辑，添加受控 patch apply 能力"
+// generateProposedPatch 基于原始内容和需求生成模拟的代码变更
+func generateProposedPatch(filePath, originalContent, requirement string) string {
+	// 简单的模拟逻辑：根据文件类型和关键词生成合理的变更
+	lines := strings.Split(originalContent, "\n")
+	var newLines []string
+	modified := false
+
+	// 对于 Go 文件，在合适的位置添加日志或注释
+	if strings.HasSuffix(filePath, ".go") {
+		for i, line := range lines {
+			newLines = append(newLines, line)
+			// 在函数开头添加日志
+			if !modified && strings.Contains(line, "func ") && strings.Contains(line, "(") && strings.Contains(line, ")") {
+				// 查找函数体开始的 {
+				for j := i; j < len(lines); j++ {
+					if strings.Contains(lines[j], "{") {
+						// 在 { 后面添加日志
+						newLines = append(newLines, "\t// TODO: 自动生成的变更 - 添加入口日志")
+						newLines = append(newLines, "\tlog.Printf(\"进入函数: %s\", \" "+extractFunctionName(line)+"\")")
+						modified = true
+						break
+					}
+				}
+			}
+			// 添加需求相关的注释
+			if !modified && i == 0 && strings.HasPrefix(line, "package ") {
+				newLines = append(newLines, "")
+				newLines = append(newLines, "// 自动生成的代码变更")
+				newLines = append(newLines, fmt.Sprintf("// 需求: %s", truncateContent(requirement, 100)))
+				modified = true
+			}
+		}
+	} else if strings.HasSuffix(filePath, ".ts") || strings.HasSuffix(filePath, ".tsx") {
+		// 对于 TypeScript 文件，添加 console.log
+		for _, line := range lines {
+			newLines = append(newLines, line)
+			if !modified && strings.Contains(line, "function ") || strings.Contains(line, "const ") && strings.Contains(line, "=>") {
+				newLines = append(newLines, "  // 自动生成的变更 - 添加调试日志")
+				newLines = append(newLines, "  console.log('执行功能:', "+fmt.Sprintf("'%s'", truncateContent(requirement, 50))+")")
+				modified = true
+				break
+			}
+		}
+	} else {
+		// 其他文件类型，在开头添加注释
+		newLines = append(newLines, fmt.Sprintf("# 自动生成的代码变更 - %s", time.Now().Format(time.RFC3339)))
+		newLines = append(newLines, fmt.Sprintf("# 需求: %s", truncateContent(requirement, 200)))
+		newLines = append(newLines, "")
+		newLines = append(newLines, lines...)
+		modified = true
 	}
-	if strings.Contains(filePath, "pipeline_service") {
-		return "补充 ExecuteChanges 方法支持变更计划落地"
+
+	if !modified {
+		// 如果没有修改，添加一个注释到末尾
+		newLines = append(lines, "")
+		newLines = append(newLines, "// 自动生成的变更")
+		newLines = append(newLines, fmt.Sprintf("// 实现需求: %s", truncateContent(requirement, 100)))
 	}
-	if strings.Contains(filePath, "controller") {
-		return "暴露 execute-changes API 供前端调用"
-	}
-	if strings.Contains(filePath, "docs") {
-		return "更新技术设计文档与赛题要求一致"
-	}
-	summaryLen := 50
-	if len(requirement) < summaryLen {
-		summaryLen = len(requirement)
-	}
-	return fmt.Sprintf("根据需求生成代码变更：%s", requirement[:summaryLen])
+
+	return strings.Join(newLines, "\n")
 }
 
-func generateDiff(original, proposed string) string {
-	return fmt.Sprintf("- 原始代码 (共 %d 行)\n+ 新代码 (%d 字符)\n\n变更概要: %s",
-		strings.Count(original, "\n")+1, len(proposed), proposed)
+// extractFunctionName 从函数定义行提取函数名
+func extractFunctionName(line string) string {
+	parts := strings.Split(line, "func ")
+	if len(parts) < 2 {
+		return "unknown"
+	}
+	funcPart := parts[1]
+	nameEnd := strings.Index(funcPart, "(")
+	if nameEnd == -1 {
+		return "unknown"
+	}
+	return strings.TrimSpace(funcPart[:nameEnd])
+}
+
+// generateGitDiff 生成标准 git 格式的 diff
+func generateGitDiff(filePath, original, proposed string) string {
+	originalLines := strings.Split(original, "\n")
+	proposedLines := strings.Split(proposed, "\n")
+
+	var diff strings.Builder
+	diff.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", filePath, filePath))
+	diff.WriteString("--- a/" + filePath + "\n")
+	diff.WriteString("+++ b/" + filePath + "\n")
+
+	// 简单的行级 diff 实现
+	maxLines := maxInt(len(originalLines), len(proposedLines))
+	var hunkStart int
+	var hunk []string
+	inHunk := false
+
+	for i := 0; i < maxLines; i++ {
+		var origLine, propLine string
+		if i < len(originalLines) {
+			origLine = originalLines[i]
+		}
+		if i < len(proposedLines) {
+			propLine = proposedLines[i]
+		}
+
+		if origLine == propLine {
+			if inHunk {
+				// 结束当前 hunk
+				hunk = append(hunk, " "+origLine)
+				// 最多保持3行上下文
+				if len(hunk) >= 6 && i >= len(originalLines)-1 || i >= len(proposedLines)-1 {
+					writeHunk(&diff, hunkStart, hunk)
+					inHunk = false
+					hunk = nil
+				}
+			}
+		} else {
+			if !inHunk {
+				// 开始新的 hunk，包含前面3行上下文
+				hunkStart = maxInt(0, i-3)
+				hunk = nil
+				for j := hunkStart; j < i; j++ {
+					if j < len(originalLines) {
+						hunk = append(hunk, " "+originalLines[j])
+					}
+				}
+				inHunk = true
+			}
+			// 添加变更行
+			if i < len(originalLines) {
+				hunk = append(hunk, "-"+origLine)
+			}
+			if i < len(proposedLines) {
+				hunk = append(hunk, "+"+propLine)
+			}
+		}
+	}
+
+	// 处理剩余的 hunk
+	if inHunk {
+		writeHunk(&diff, hunkStart, hunk)
+	}
+
+	return diff.String()
+}
+
+// writeHunk 写入 diff hunk 头部
+func writeHunk(diff *strings.Builder, start int, hunk []string) {
+	// 计算 hunk 的行数
+	oldCount := 0
+	newCount := 0
+	for _, line := range hunk {
+		if strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ") {
+			oldCount++
+		}
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, " ") {
+			newCount++
+		}
+	}
+	diff.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", start+1, oldCount, start+1, newCount))
+	for _, line := range hunk {
+		diff.WriteString(line + "\n")
+	}
 }
 
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
@@ -282,9 +527,9 @@ type ChangeItem struct {
 
 // ExecutionResult 变更执行结果
 type ExecutionResult struct {
-	AppliedFiles []string          `json:"appliedFiles"`
-	FailedFiles  []map[string]any  `json:"failedFiles"`
-	Summary      string            `json:"summary"`
+	AppliedFiles []string         `json:"appliedFiles"`
+	FailedFiles  []map[string]any `json:"failedFiles"`
+	Summary      string           `json:"summary"`
 }
 
 // ExecuteChanges 执行变更计划
