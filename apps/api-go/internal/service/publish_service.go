@@ -213,7 +213,43 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 	}
 	log.Printf("publish workflow persisted: session_id=%s requirement_id=%s tasks=%d deliveries=%d", payload.SessionID, output.Requirement.ID, len(output.Tasks), len(deliveries))
 
+	// 发送需求确认卡片给发布者
+	s.sendApprovalCard(ctx, aggregate, output.Requirement)
+
 	return nil
+}
+
+// sendApprovalCard 向发布者发送需求确认卡片
+func (s *PublishService) sendApprovalCard(ctx context.Context, aggregate *repo.SessionAggregate, requirement model.Requirement) {
+	if s.feishuClient == nil {
+		log.Printf("sendApprovalCard skipped: feishu client not available")
+		return
+	}
+
+	// 获取发布者的 openID
+	ownerOpenID := aggregate.Owner.FeishuOpenID
+	if ownerOpenID == "" {
+		log.Printf("sendApprovalCard skipped: owner open_id is empty")
+		return
+	}
+
+	// 构建卡片 payload
+	summary := utils.Summarize(aggregate.Session.Summary, 200)
+	cardPayload := feishu.ApprovalCardPayload{
+		Title:       aggregate.Session.Title,
+		Summary:     summary,
+		Requirement: aggregate.Session.Summary,
+		SessionID:   aggregate.Session.ID,
+		RunID:       "", // 将在后续创建 pipeline run 后填充
+	}
+
+	sendResult, err := s.feishuClient.SendApprovalCardMessage(ctx, ownerOpenID, cardPayload)
+	if err != nil {
+		log.Printf("sendApprovalCard failed: session_id=%s open_id=%s err=%v", aggregate.Session.ID, ownerOpenID, err)
+		return
+	}
+
+	log.Printf("sendApprovalCard success: session_id=%s open_id=%s message_id=%s", aggregate.Session.ID, ownerOpenID, sendResult.RemoteID)
 }
 
 func (s *PublishService) fillRoleOwnersFromUsers(ctx context.Context, existing []model.RoleOwner) ([]model.RoleOwner, error) {

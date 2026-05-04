@@ -1,30 +1,19 @@
 import { createRouter, RouterProvider } from '@tanstack/react-router'
-import { Outlet, createRoute, createRootRoute } from '@tanstack/react-router'
+import { createRoute, createRootRoute } from '@tanstack/react-router'
 import Home from './pages/Home'
 import NewRequirement from './pages/NewRequirement'
 import Workflows from './pages/Workflows'
 import Monitoring from './pages/Monitoring'
-import Approvals from './pages/Approvals'
 import Delivery from './pages/Delivery'
 import AuthCallback from './pages/AuthCallback'
 import Session from './pages/Session'
 import Debug from './pages/Debug'
 import { APIDocument } from './pages/Swagger'
 import Assets from './pages/Assets'
-import PipelineChatPanel from './components/PipelineChatPanel'
 
-function RootLayout() {
-  return (
-    <>
-      <Outlet />
-      <PipelineChatPanel />
-    </>
-  )
-}
 
-const rootRoute = createRootRoute({
-  component: RootLayout,
-})
+
+const rootRoute = createRootRoute()
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -52,19 +41,13 @@ const workflowsRoute = createRoute({
 const monitoringRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/monitoring',
+  validateSearch: (search: Record<string, unknown>): { runId?: string; action?: string } => {
+    return {
+      runId: search.runId as string | undefined,
+      action: search.action as string | undefined,
+    }
+  },
   component: Monitoring,
-})
-
-const approvalsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/approvals',
-  component: Approvals,
-})
-
-const approvalsRunRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/approvals/$runId',
-  component: Approvals,
 })
 
 const deliveryRoute = createRoute({
@@ -103,7 +86,7 @@ const assetsRoute = createRoute({
   component: Assets,
 })
 
-const routeTree = rootRoute.addChildren([indexRoute, newRequirementRoute, workflowsRoute, monitoringRoute, approvalsRoute, approvalsRunRoute, deliveryRoute, authCallbackRoute, sessionRoute, debugRoute, swaggerRoute, assetsRoute])
+const routeTree = rootRoute.addChildren([indexRoute, newRequirementRoute, workflowsRoute, monitoringRoute, deliveryRoute, authCallbackRoute, sessionRoute, debugRoute, swaggerRoute, assetsRoute])
 const router = createRouter({ routeTree })
 
 declare module '@tanstack/react-router' {

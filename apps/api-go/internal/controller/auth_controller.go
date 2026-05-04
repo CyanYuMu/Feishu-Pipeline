@@ -263,6 +263,121 @@ func (c *AuthController) GitHubRepos(ctx *gin.Context) {
 	writeSuccess(ctx, http.StatusOK, repos)
 }
 
+// GitHubBranches
+// @tags 认证
+// @summary 获取 GitHub 仓库分支列表
+// @router /api/github/repos/{owner}/{repo}/branches [GET]
+// @param owner path string true "仓库所有者"
+// @param repo path string true "仓库名称"
+// @produce application/json
+func (c *AuthController) GitHubBranches(ctx *gin.Context) {
+	userID := currentUserID(ctx)
+	if userID == "" {
+		writeError(ctx, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
+	owner := ctx.Param("owner")
+	repo := ctx.Param("repo")
+	if owner == "" || repo == "" {
+		writeError(ctx, http.StatusBadRequest, errors.New("owner and repo are required"))
+		return
+	}
+
+	branches, err := c.authService.ListGitHubBranches(ctx.Request.Context(), userID, owner, repo)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusOK, branches)
+}
+
+// CreateGitHubRepo
+// @tags 认证
+// @summary 创建 GitHub 仓库
+// @router /api/github/repos [POST]
+// @accept application/json
+// @produce application/json
+// @param req body service.CreateGitHubRepoInput true "仓库信息"
+func (c *AuthController) CreateGitHubRepo(ctx *gin.Context) {
+	userID := currentUserID(ctx)
+	if userID == "" {
+		writeError(ctx, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
+	var input service.CreateGitHubRepoInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		writeError(ctx, http.StatusBadRequest, errors.New("invalid request body"))
+		return
+	}
+
+	if input.Name == "" {
+		writeError(ctx, http.StatusBadRequest, errors.New("repo name is required"))
+		return
+	}
+
+	result, err := c.authService.CreateGitHubRepo(ctx.Request.Context(), userID, input)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusCreated, result)
+}
+
+// FeishuDocuments
+// @tags 认证
+// @summary 获取飞书文档列表
+// @router /api/feishu/documents [GET]
+// @param folder_token query string false "文件夹token"
+// @produce application/json
+func (c *AuthController) FeishuDocuments(ctx *gin.Context) {
+	userID := currentUserID(ctx)
+	if userID == "" {
+		writeError(ctx, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
+	folderToken := ctx.Query("folder_token")
+	docs, err := c.authService.GetFeishuDocuments(ctx.Request.Context(), userID, folderToken)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusOK, docs)
+}
+
+// FeishuDocumentContent
+// @tags 认证
+// @summary 获取飞书文档内容
+// @router /api/feishu/documents/:documentId/content [GET]
+// @param documentId path string true "文档ID"
+// @produce text/plain
+func (c *AuthController) FeishuDocumentContent(ctx *gin.Context) {
+	userID := currentUserID(ctx)
+	if userID == "" {
+		writeError(ctx, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
+	documentID := ctx.Param("documentId")
+	if documentID == "" {
+		writeError(ctx, http.StatusBadRequest, errors.New("document_id is required"))
+		return
+	}
+
+	content, err := c.authService.GetFeishuDocumentContent(ctx.Request.Context(), userID, documentID)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	ctx.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(content))
+}
+
 // FeishuConfig
 // @tags 认证
 // @summary 获取飞书 SSO 前端配置
@@ -364,4 +479,27 @@ func parseSameSite(value string) http.SameSite {
 	default:
 		return http.SameSiteLaxMode
 	}
+}
+
+// HandleFeishuCardCallback 处理飞书交互卡片按钮回调
+// @tags 飞书
+// @summary 飞书卡片回调
+// @description 接收飞书交互卡片按钮点击事件，处理 approve/reject 操作
+// @router /public/feishu/card/callback [POST]
+// @accept application/json
+// @produce application/json
+func (c *AuthController) HandleFeishuCardCallback(ctx *gin.Context) {
+	var request service.FeishuCardCallbackRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	result, err := c.authService.HandleFeishuCardCallback(ctx.Request.Context(), request)
+	if err != nil {
+		writeError(ctx, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusOK, result)
 }

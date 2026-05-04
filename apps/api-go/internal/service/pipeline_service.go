@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"feishu-pipeline/apps/api-go/internal/external/feishu"
+	"feishu-pipeline/apps/api-go/internal/external"
 	"feishu-pipeline/apps/api-go/internal/job"
 	"feishu-pipeline/apps/api-go/internal/model"
 	"feishu-pipeline/apps/api-go/internal/pipeline"
@@ -19,10 +20,9 @@ type PipelineQueue interface {
 }
 
 type PipelineService struct {
-	repository   *repo.Repository
-	engine       *pipeline.Engine
-	queue        PipelineQueue
-	feishuClient *feishu.Client
+	repository *repo.Repository
+	engine     *pipeline.Engine
+	queue      PipelineQueue
 }
 
 type PipelineServiceOption func(*PipelineService)
@@ -30,7 +30,7 @@ type PipelineServiceOption func(*PipelineService)
 func WithPipelineExecutor(executor pipeline.Executor) PipelineServiceOption {
 	return func(service *PipelineService) {
 		if executor != nil {
-			service.engine = pipeline.NewEngine(service.repository, executor, service.feishuClient)
+			service.engine = pipeline.NewEngine(service.repository, executor)
 		}
 	}
 }
@@ -84,13 +84,13 @@ type CreatePipelineRunInput struct {
 	TargetBranch    string
 	SourceSessionID string
 	CreatedBy       string
+	SelectedDocUrls []string
 }
 
-func NewPipelineService(repository *repo.Repository, feishuClient *feishu.Client, options ...PipelineServiceOption) *PipelineService {
+func NewPipelineService(repository *repo.Repository, options ...PipelineServiceOption) *PipelineService {
 	service := &PipelineService{
-		repository:   repository,
-		feishuClient: feishuClient,
-		engine:       pipeline.NewEngine(repository, pipeline.NewSequentialExecutor(pipeline.WithAgentRunner(pipeline.NewAgentRunner(nil, pipeline.DefaultPromptRegistry()))), feishuClient),
+		repository: repository,
+		engine:     pipeline.NewEngine(repository, pipeline.NewSequentialExecutor(pipeline.WithAgentRunner(pipeline.NewAgentRunner(nil, pipeline.DefaultPromptRegistry())))),
 	}
 	for _, option := range options {
 		option(service)
@@ -174,6 +174,8 @@ func buildPipelineRunCurrent(run model.PipelineRun, stages []model.StageRun, art
 	if current.Stage == nil && len(stages) > 0 {
 		current.Stage = &stages[0]
 	}
+
+	// 优先获取当前 Stage 的 artifact
 	if current.Stage != nil {
 		for idx := len(artifacts) - 1; idx >= 0; idx-- {
 			if artifacts[idx].StageRunID == current.Stage.ID {
@@ -194,6 +196,35 @@ func buildPipelineRunCurrent(run model.PipelineRun, stages []model.StageRun, art
 			}
 		}
 	}
+
+	// 如果当前 Stage 没有 artifact（审批阶段），获取最后一个有效的 artifact
+	if current.Artifact == nil && len(artifacts) > 0 {
+		for idx := len(artifacts) - 1; idx >= 0; idx-- {
+			if artifacts[idx].ContentText != "" || artifacts[idx].ContentJSON != "" {
+				current.Artifact = &artifacts[idx]
+				break
+			}
+		}
+		// 仍没有就取最后一个
+		if current.Artifact == nil {
+			current.Artifact = &artifacts[len(artifacts)-1]
+		}
+	}
+
+	// 如果当前 Stage 没有 checkpoint（审批阶段），获取最后一个 pending checkpoint
+	if current.Checkpoint == nil && len(checkpoints) > 0 {
+		for idx := len(checkpoints) - 1; idx >= 0; idx-- {
+			if checkpoints[idx].Status == model.CheckpointPending {
+				current.Checkpoint = &checkpoints[idx]
+				break
+			}
+		}
+		// 仍没有就取最后一个
+		if current.Checkpoint == nil {
+			current.Checkpoint = &checkpoints[len(checkpoints)-1]
+		}
+	}
+
 	if latestDelivery := latestGitDelivery(deliveries); latestDelivery != nil {
 		current.Delivery = latestDelivery
 	}
@@ -289,6 +320,13 @@ func (s *PipelineService) CreatePipelineRun(ctx context.Context, input CreatePip
 		targetBranch = "main"
 	}
 	now := time.Now().UTC()
+	// 序列化飞书文档 URL
+	selectedDocUrlsJSON := ""
+	if len(input.SelectedDocUrls) > 0 {
+		if data, err := json.Marshal(input.SelectedDocUrls); err == nil {
+			selectedDocUrlsJSON = string(data)
+		}
+	}
 	run := model.PipelineRun{
 		ID:              utils.NewID("run"),
 		TemplateID:      templateID,
@@ -301,6 +339,7 @@ func (s *PipelineService) CreatePipelineRun(ctx context.Context, input CreatePip
 		Status:          model.PipelineRunDraft,
 		CurrentStageKey: definition.Stages[0].Key,
 		CreatedBy:       input.CreatedBy,
+		SelectedDocUrls: selectedDocUrlsJSON,
 		BaseModel:       model.BaseModel{CreatedAt: now, UpdatedAt: now},
 	}
 	stageRuns := make([]model.StageRun, 0, len(definition.Stages))
@@ -588,4 +627,121 @@ func checkpointTypeForStage(stageKey string) model.CheckpointType {
 	default:
 		return model.CheckpointCodeReview
 	}
+}
+
+// ExecuteChangesParams 变更执行参数
+type ExecuteChangesParams struct {
+	ChangeSet   []map[string]any
+	CommitterID string
+	Token       string
+}
+
+// ExecuteChangesResult 变更执行结果
+type ExecuteChangesResult struct {
+	AppliedFiles []string         `json:"appliedFiles"`
+	FailedFiles  []map[string]any `json:"failedFiles"`
+	Summary      string           `json:"summary"`
+}
+
+// ExecuteChanges 审批通过后执行变更计划
+func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, params ExecuteChangesParams) (*ExecuteChangesResult, error) {
+	run, err := s.repository.GetPipelineRunByID(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+
+	if run.Status != model.PipelineRunCompleted {
+		return nil, fmt.Errorf("只能在完成状态下执行变更，当前状态: %s", run.Status)
+	}
+
+	// 查找 code_diff 类型的 artifact
+	artifacts, err := s.repository.ListArtifactsByPipelineRunID(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+
+	var codeDiffArtifact *model.Artifact
+	for idx := len(artifacts) - 1; idx >= 0; idx-- {
+		if artifacts[idx].ArtifactType == model.ArtifactCodeDiff {
+			codeDiffArtifact = &artifacts[idx]
+			break
+		}
+	}
+
+	if codeDiffArtifact == nil {
+		return nil, fmt.Errorf("未找到代码变更计划 artifact")
+	}
+
+	// 转换变更项
+	execChangeSet := make([]pipeline.ChangeItem, 0, len(params.ChangeSet))
+	for _, item := range params.ChangeSet {
+		if filePath, ok := item["filePath"].(string); ok {
+			changeItem := pipeline.ChangeItem{FilePath: filePath}
+			if proposedPatch, ok := item["proposedPatch"].(string); ok {
+				changeItem.NewContent = proposedPatch
+			}
+			if sha, ok := item["sha"].(string); ok {
+				changeItem.SHA = sha
+			}
+			execChangeSet = append(execChangeSet, changeItem)
+		}
+	}
+
+	// 执行变更
+	gh := external.NewGitHubService()
+	execParams := pipeline.ExecuteChangesParams{
+		RunID:       runID,
+		ChangeSet:   execChangeSet,
+		CommitterID: params.CommitterID,
+		Token:       params.Token,
+	}
+	result, err := pipeline.ExecuteChanges(ctx, gh, execParams, run)
+	if err != nil {
+		return nil, err
+	}
+
+	// 记录执行结果到 GitDelivery
+	changedFilesJSON, _ := json.Marshal(result.AppliedFiles)
+	delivery := model.GitDelivery{
+		ID:               utils.NewID("delivery"),
+		PipelineRunID:     runID,
+		Provider:         "github",
+		Repo:             run.TargetRepo,
+		BaseBranch:       run.TargetBranch,
+		HeadBranch:       run.WorkBranch,
+		ChangedFilesJSON: string(changedFilesJSON),
+		ValidationJSON:   string(changedFilesJSON),
+		SummaryMarkdown:  result.Summary,
+		Status:           model.GitDeliveryCompleted,
+		BaseModel:        model.BaseModel{CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()},
+	}
+	if err := s.repository.CreateGitDelivery(ctx, &delivery); err != nil {
+		return nil, err
+	}
+
+	// 创建 Pull Request
+	if params.Token != "" {
+		gh := external.NewGitHubService()
+		owner, repo, ok := external.ParseRepoPath(run.TargetRepo)
+		if ok {
+			_, _, prErr := gh.CreatePullRequest(
+				ctx,
+				params.Token,
+				owner, repo,
+				run.WorkBranch,
+				run.TargetBranch,
+				run.Title,
+				result.Summary,
+			)
+			if prErr != nil {
+				// PR 创建失败不影响执行结果
+			}
+		}
+	}
+
+	return &ExecuteChangesResult{
+		AppliedFiles: result.AppliedFiles,
+		FailedFiles:  result.FailedFiles,
+		Summary:     result.Summary,
+	}, nil
 }

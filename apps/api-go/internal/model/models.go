@@ -4,6 +4,8 @@ import "time"
 
 type Role string
 
+// ArtifactTypeDescriptions 提供 ArtifactType 的中文描述
+
 const (
 	RoleProduct  Role = "product"
 	RoleFrontend Role = "frontend"
@@ -104,6 +106,16 @@ const (
 	ArtifactDeliverySummary       ArtifactType = "delivery_summary"
 )
 
+// ArtifactTypeDescriptions 提供 ArtifactType 的中文描述
+var ArtifactTypeDescriptions = map[ArtifactType]string{
+	ArtifactStructuredRequirement: "结构化需求",
+	ArtifactSolutionDesign:        "技术方案",
+	ArtifactCodeDiff:              "代码变更计划",
+	ArtifactTestReport:            "测试报告",
+	ArtifactReviewReport:          "评审报告",
+	ArtifactDeliverySummary:      "交付摘要",
+}
+
 type CheckpointType string
 
 const (
@@ -175,6 +187,7 @@ type PipelineRun struct {
 	Status          PipelineRunStatus `gorm:"size:32;not null;index"`
 	CurrentStageKey string            `gorm:"size:128;not null"`
 	CreatedBy       string            `gorm:"size:64;not null;index"`
+	SelectedDocUrls string            `gorm:"type:text"` // JSON 数组存储飞书文档 URL
 	StartedAt       *time.Time
 	FinishedAt      *time.Time
 	BaseModel
@@ -206,6 +219,32 @@ type Artifact struct {
 	FilePath      string       `gorm:"size:512"`
 	MetaJSON      string       `gorm:"type:text"`
 	BaseModel
+}
+
+// ChangeSetItem 单个文件变更项
+type ChangeSetItem struct {
+	FilePath        string `json:"filePath"`
+	ChangeType      string `json:"changeType"`
+	Reason          string `json:"reason"`
+	ProposedPatch   string `json:"proposedPatch"`
+	ContextIncluded bool   `json:"contextIncluded"`
+	OriginalContent string `json:"originalContent,omitempty"`
+	ProposedDiff    string `json:"proposedDiff,omitempty"`
+}
+
+// ExecutionResult 执行结果
+type ExecutionResult struct {
+	AppliedFiles []string         `json:"appliedFiles"`
+	FailedFiles  []ExecutionError `json:"failedFiles"`
+	Summary      string           `json:"summary"`
+	ExecutedAt   time.Time        `json:"executedAt"`
+}
+
+
+// ExecutionError 执行失败的文件错误
+type ExecutionError struct {
+	FilePath string `json:"filePath"`
+	Error    string `json:"error"`
 }
 
 type Checkpoint struct {

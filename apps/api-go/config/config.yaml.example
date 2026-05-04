@@ -44,3 +44,9 @@ ai:
     api_key: "<YOUR_OPENAI_COMPATIBLE_API_KEY>"
     max_tokens: 4096
     timeout_sec: 120
+
+github:
+  enabled: false
+  client_id: "<YOUR_GITHUB_CLIENT_ID>"
+  client_secret: "<YOUR_GITHUB_CLIENT_SECRET>"
+  redirect_uri: "http://localhost:3001/api/auth/github/callback"

@@ -27,7 +27,7 @@ func NewSequentialExecutor(options ...SequentialExecutorOption) *SequentialExecu
 	executor := &SequentialExecutor{handlers: map[string]StageHandler{
 		StageRequirementAnalysis: RequirementAnalysisHandler{},
 		StageSolutionDesign:      SolutionDesignHandler{},
-		StageCodeGeneration:      CodeGenerationHandler{},
+		StageCodeGeneration:      NewCodeGenerationHandler(nil),
 		StageTestGeneration:      TestGenerationHandler{},
 		StageCodeReview:          CodeReviewHandler{},
 		StageDelivery:            DeliveryHandler{},

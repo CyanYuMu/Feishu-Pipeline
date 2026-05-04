@@ -20,9 +20,9 @@ export default defineConfig({
           console.error('[PROXY ERROR]', err.message)
         }
       },
-      // 飞书相关 API 走 TS 后端
-      '/api/feishu': {
-        target: 'http://localhost:3001',
+      // 飞书文档列表走 Go 后端（需要认证）
+      '/api/feishu/documents': {
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
       '/api/openapi': {
