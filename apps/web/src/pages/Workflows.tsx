@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Card, Empty, Progress, Skeleton, Space, Tag, Tooltip, message } from 'antd'
-import {
-  PauseCircleOutlined,
-  PlayCircleOutlined,
-  ReloadOutlined,
-  StopOutlined,
-  SyncOutlined,
-} from '@ant-design/icons'
+import { Alert, Button, Card, Checkbox, Empty, Form, Input, Modal, Progress, Select, Skeleton, Space, Tag, Tooltip, message, Drawer, Spin } from 'antd'
+import { PlusOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined, SyncOutlined, FileTextOutlined } from '@ant-design/icons'
 import Sidebar from '../components/Sidebar'
 import {
   type AgentRun,
@@ -39,6 +33,27 @@ export default function Workflows() {
   const [loadingTimeline, setLoadingTimeline] = useState(false)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [createModalVisible, setCreateModalVisible] = useState(false)
+  const [createLoading, setCreateLoading] = useState(false)
+  const [githubRepos, setGithubRepos] = useState<{full_name: string; html_url: string; private: boolean}[]>([])
+  const [loadingRepos, setLoadingRepos] = useState(false)
+  const [githubBranches, setGithubBranches] = useState<string[]>([])
+  const [loadingBranches, setLoadingBranches] = useState(false)
+  const [showCreateRepoModal, setShowCreateRepoModal] = useState(false)
+  const [createRepoLoading, setCreateRepoLoading] = useState(false)
+  // 飞书文档选择相关状态
+  const [docDrawerVisible, setDocDrawerVisible] = useState(false)
+  const [wikiSpaces, setWikiSpaces] = useState<any[]>([])
+  const [loadingSpaces, setLoadingSpaces] = useState(false)
+  const [currentFolder, setCurrentFolder] = useState('')
+  const [folderHistory, setFolderHistory] = useState<{token: string; name: string}[]>([])
+  const [selectedDocUrls, setSelectedDocUrls] = useState<string[]>([])
+  const [form] = Form.useForm<{
+    title: string
+    requirementText: string
+    targetRepo: string
+    targetBranch: string
+  }>()
   const redirectedRunIdRef = useRef('')
 
   const selectedRun = useMemo(
@@ -60,7 +75,10 @@ export default function Workflows() {
     try {
       const items = await fetchPipelineRuns()
       setRuns(items)
-      setSelectedRunId(prev => prev || items[0]?.id || '')
+      const firstId = items[0]?.id
+      if (firstId && firstId !== 'undefined') {
+        setSelectedRunId(firstId)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载流水线失败')
       setRuns([])
@@ -70,14 +88,17 @@ export default function Workflows() {
   }
 
   const loadTimeline = async (runId: string) => {
-    if (!runId) {
+    // 防御性检查：确保 runId 是有效的非空字符串
+    const safeId = String(runId || '').trim()
+    if (!safeId || safeId === 'undefined' || safeId === 'null') {
+      console.warn('[loadTimeline] Invalid runId, skipping:', runId)
       setTimeline(null)
       return
     }
     setLoadingTimeline(true)
     setError('')
     try {
-      setTimeline(await fetchPipelineTimeline(runId))
+      setTimeline(await fetchPipelineTimeline(safeId))
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载工作台失败')
       setTimeline(null)
@@ -93,6 +114,14 @@ export default function Workflows() {
   useEffect(() => {
     void loadTimeline(selectedRunId)
   }, [selectedRunId])
+
+  // 防止 selectedRunId 为 undefined 或空字符串时发送请求
+  useEffect(() => {
+    if (!selectedRunId || selectedRunId === 'undefined' || selectedRunId === '') {
+      return
+    }
+    void loadTimeline(selectedRunId)
+  }, [])
 
   useEffect(() => {
     if (!timeline || !isLiveRun(timeline.run.status)) return
@@ -112,12 +141,187 @@ export default function Workflows() {
     }
     if (redirectedRunIdRef.current === timeline.run.id) return
     redirectedRunIdRef.current = timeline.run.id
-    window.location.assign(`/approvals/${encodeURIComponent(timeline.run.id)}`)
+    window.location.assign(`/monitoring?runId=${encodeURIComponent(timeline.run.id)}&action=approve`)
   }, [timeline?.run.id, timeline?.run.status])
 
   const refreshAll = async () => {
     await loadRuns()
     if (selectedRunId) await loadTimeline(selectedRunId)
+  }
+
+  const handleCreate = async (values: CreateFormValues) => {
+    setCreateLoading(true)
+    try {
+      const res = await fetch('/api/pipeline-runs', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: values.title,
+          requirementText: values.requirementText,
+          targetRepo: values.targetRepo || 'self',
+          targetBranch: values.targetBranch || 'main',
+          selectedDocUrls: selectedDocUrls, // 飞书文档 URL
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || '创建失败')
+      }
+      message.success('Pipeline 创建成功')
+      setCreateModalVisible(false)
+      setSelectedDocUrls([])
+      form.resetFields()
+      await loadRuns()
+      if (data.data?.id) {
+        setSelectedRunId(data.data.id)
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '创建失败')
+    } finally {
+      setCreateLoading(false)
+    }
+  }
+
+  const loadGithubRepos = async () => {
+    setLoadingRepos(true)
+    try {
+      const res = await fetch('/api/github/repos', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setGithubRepos(data.data || [])
+      }
+    } catch {
+      // 忽略错误，用户可以手动输入
+    } finally {
+      setLoadingRepos(false)
+    }
+  }
+
+  // 加载仓库的分支列表
+  const loadGithubBranches = async (repoFullName: string) => {
+    if (repoFullName === 'self') {
+      setGithubBranches([])
+      return
+    }
+    const [owner, repo] = repoFullName.split('/')
+    if (!owner || !repo) return
+
+    setLoadingBranches(true)
+    try {
+      const res = await fetch(`/api/github/repos/${owner}/${repo}/branches`, { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        const branches = (data.data || []).map((b: { name: string }) => b.name)
+        setGithubBranches(branches)
+        // 如果有 main 分支，自动选中
+        if (branches.includes('main')) {
+          form.setFieldValue('targetBranch', 'main')
+        }
+      }
+    } catch {
+      // 忽略错误
+    } finally {
+      setLoadingBranches(false)
+    }
+  }
+
+  // 打开创建弹窗时加载 GitHub 仓库列表
+  const handleOpenCreateModal = () => {
+    setCreateModalVisible(true)
+    setGithubBranches([])
+    void loadGithubRepos()
+  }
+
+  // 打开文档选择抽屉
+  const openDocPicker = async () => {
+    setDocDrawerVisible(true)
+    setLoadingSpaces(true)
+    setWikiSpaces([])
+    setCurrentFolder('')
+    setFolderHistory([])
+    try {
+      const res = await fetch('/api/feishu/documents')
+      if (res.ok) {
+        const data = await res.json()
+        setWikiSpaces(data.data || [])
+      } else {
+        message.error('获取文档列表失败，请先绑定飞书')
+      }
+    } catch {
+      message.error('获取文档列表失败')
+    } finally {
+      setLoadingSpaces(false)
+    }
+  }
+
+  // 进入文件夹
+  const enterFolder = async (folderToken: string) => {
+    setLoadingSpaces(true)
+    try {
+      const res = await fetch(`/api/feishu/documents?folder_token=${folderToken}`)
+      if (res.ok) {
+        const data = await res.json()
+        // 保存当前文件夹到历史
+        const currentFiles = wikiSpaces.find(f => f.type === 'folder')
+        if (currentFiles) {
+          setFolderHistory(prev => [...prev, { token: currentFolder, name: '当前文件夹' }])
+        }
+        setCurrentFolder(folderToken)
+        setWikiSpaces(data.data || [])
+      }
+    } catch {
+      message.error('加载文件夹失败')
+    } finally {
+      setLoadingSpaces(false)
+    }
+  }
+
+  // 返回上级文件夹
+  const goBack = async () => {
+    const history = [...folderHistory]
+    const prev = history.pop()
+    if (!prev) return
+    setFolderHistory(history)
+    setCurrentFolder(prev.token)
+    setLoadingSpaces(true)
+    try {
+      const url = prev.token ? `/api/feishu/documents?folder_token=${prev.token}` : '/api/feishu/documents'
+      const res = await fetch(url)
+      if (res.ok) {
+        const data = await res.json()
+        setWikiSpaces(data.data || [])
+      }
+    } catch {
+      message.error('加载文件夹失败')
+    } finally {
+      setLoadingSpaces(false)
+    }
+  }
+
+  // 选择/取消选择文档
+  const toggleSelectDocument = (doc: any) => {
+    if (doc.type === 'folder') {
+      void enterFolder(doc.token)
+      return
+    }
+    // 只处理文档类型，跳过 bitable 等
+    if (doc.type !== 'docx' && doc.type !== 'sheet' && doc.type !== 'mindnote' && doc.type !== 'slides') {
+      return
+    }
+    const url = doc.url?.replace('lanshanteam.feishu.cn', 'feishu.cn')
+    setSelectedDocUrls(prev => {
+      if (prev.includes(url)) {
+        return prev.filter(u => u !== url)
+      }
+      return [...prev, url]
+    })
+  }
+
+  // 仓库选择变化时加载分支
+  const handleRepoChange = (value: string) => {
+    form.setFieldValue('targetBranch', value === 'self' ? 'main' : '')
+    void loadGithubBranches(value)
   }
 
   const runAction = async (action: string, fn: () => Promise<void>) => {
@@ -194,7 +398,10 @@ export default function Workflows() {
                 <h1 className="m-0 text-lg font-bold text-on-surface">Pipeline 工作台</h1>
                 <div className="text-xs text-on-surface-variant">{runs.length} 个运行记录</div>
               </div>
-              <Button type="text" icon={<ReloadOutlined />} onClick={refreshAll} loading={loadingRuns} />
+              <Space>
+                <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>新建</Button>
+                <Button type="text" icon={<ReloadOutlined />} onClick={refreshAll} loading={loadingRuns} />
+              </Space>
             </div>
             <div className="p-3">
               {loadingRuns ? <Skeleton active paragraph={{ rows: 8 }} /> : null}
@@ -300,6 +507,90 @@ export default function Workflows() {
           </section>
         </div>
       </main>
+      <CreatePipelineModal
+        open={createModalVisible}
+        onClose={() => setCreateModalVisible(false)}
+        onSubmit={handleCreate}
+        loading={createLoading}
+        form={form}
+        githubRepos={githubRepos.map(r => ({ fullName: r.full_name, htmlUrl: r.html_url, isPrivate: r.private }))}
+        loadingRepos={loadingRepos}
+        githubBranches={githubBranches}
+        loadingBranches={loadingBranches}
+        onRepoChange={handleRepoChange}
+        onOpenCreateRepo={() => setShowCreateRepoModal(true)}
+        selectedDocUrls={selectedDocUrls}
+        onDocPicker={openDocPicker}
+        onRemoveDoc={(i) => setSelectedDocUrls(prev => prev.filter((_, idx) => idx !== i))}
+      />
+
+      {/* 飞书文档选择抽屉 */}
+      <FeishuDocDrawer
+        open={docDrawerVisible}
+        onClose={() => setDocDrawerVisible(false)}
+        wikiSpaces={wikiSpaces}
+        loadingSpaces={loadingSpaces}
+        currentFolder={currentFolder}
+        onBack={goBack}
+        onToggleSelect={toggleSelectDocument}
+        selectedDocUrls={selectedDocUrls}
+      />
+
+      {/* 新建仓库弹窗 */}
+      <Modal
+        title="新建 GitHub 仓库"
+        open={showCreateRepoModal}
+        onCancel={() => setShowCreateRepoModal(false)}
+        footer={null}
+        width={400}
+      >
+        <Form
+          layout="vertical"
+          onFinish={async (values) => {
+            setCreateRepoLoading(true)
+            try {
+              const res = await fetch('/api/github/repos', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: values.name,
+                  description: values.description || '',
+                  private: values.private || false,
+                }),
+              })
+              const data = await res.json()
+              if (!res.ok) throw new Error(data.error || '创建失败')
+              message.success('仓库创建成功')
+              setShowCreateRepoModal(false)
+              // 刷新仓库列表并选中新建的仓库
+              await loadGithubRepos()
+              form.setFieldValue('targetRepo', data.data.full_name)
+              void loadGithubBranches(data.data.full_name)
+            } catch (err) {
+              message.error(err instanceof Error ? err.message : '创建失败')
+            } finally {
+              setCreateRepoLoading(false)
+            }
+          }}
+        >
+          <Form.Item name="name" label="仓库名称" rules={[{ required: true, message: '请输入仓库名称' }]}>
+            <Input placeholder="my-awesome-repo" />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea placeholder="可选，仓库描述..." rows={2} />
+          </Form.Item>
+          <Form.Item name="private" valuePropName="checked">
+            <Checkbox>设为私有仓库</Checkbox>
+          </Form.Item>
+          <div className="flex justify-end gap-3 mt-4">
+            <Button onClick={() => setShowCreateRepoModal(false)}>取消</Button>
+            <Button type="primary" htmlType="submit" loading={createRepoLoading}>
+              创建
+            </Button>
+          </div>
+        </Form>
+      </Modal>
     </div>
   )
 }
@@ -365,5 +656,224 @@ function AgentRunItem({ agentRun }: { agentRun: AgentRun }) {
       </div>
       <div className="mt-2 text-xs text-on-surface-variant">{formatDuration(agentRun.latencyMs)}</div>
     </div>
+  )
+}
+
+// 新建 Pipeline Modal
+interface CreateFormValues {
+  title: string
+  requirementText: string
+  targetRepo: string
+  targetBranch: string
+}
+
+function CreatePipelineModal({
+  open,
+  onClose,
+  onSubmit,
+  loading,
+  form,
+  githubRepos,
+  loadingRepos,
+  githubBranches,
+  loadingBranches,
+  onRepoChange,
+  onOpenCreateRepo,
+  selectedDocUrls,
+  onDocPicker,
+  onRemoveDoc,
+}: {
+  open: boolean
+  onClose: () => void
+  onSubmit: (values: CreateFormValues) => void
+  loading: boolean
+  form: ReturnType<typeof Form.useForm<CreateFormValues>>[0]
+  githubRepos: {fullName: string; htmlUrl: string; isPrivate?: boolean}[]
+  loadingRepos: boolean
+  githubBranches: string[]
+  loadingBranches: boolean
+  onRepoChange: (value: string) => void
+  onOpenCreateRepo: () => void
+  selectedDocUrls: string[]
+  onDocPicker: () => void
+  onRemoveDoc: (index: number) => void
+}) {
+  return (
+    <Modal
+      title="新建 Pipeline"
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={520}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={onSubmit}
+        initialValues={{
+          targetRepo: 'self',
+          targetBranch: 'main',
+        }}
+      >
+        <Form.Item
+          name="title"
+          label="流水线名称"
+          rules={[{ required: true, message: '请输入流水线名称' }]}
+        >
+          <Input placeholder="例如：用户信息查询接口" />
+        </Form.Item>
+        <Form.Item
+          name="requirementText"
+          label="需求描述"
+          tooltip="直接输入需求描述，或选取飞书文档，两者至少选一"
+        >
+          <Input.TextArea
+            rows={4}
+            placeholder="详细描述你的需求，例如：创建一个用户信息查询接口，支持根据 userId 查询用户名、头像、年龄等信息..."
+          />
+        </Form.Item>
+        {/* 飞书文档选择 */}
+        <Form.Item label="关联飞书文档">
+          <Button icon={<FileTextOutlined />} onClick={onDocPicker} size="small">
+            选取飞书文档
+          </Button>
+          {selectedDocUrls.length > 0 && (
+            <div className="mt-2">
+              <span className="text-xs text-gray-500">已选 {selectedDocUrls.length} 个文档</span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {selectedDocUrls.map((url, i) => (
+                  <Tag
+                    key={i}
+                    closable
+                    onClose={() => {
+                      onRemoveDoc(i)
+                    }}
+                    color="blue"
+                  >
+                    {url.split('/').pop()?.slice(0, 20) || '文档'}
+                  </Tag>
+                ))}
+              </div>
+            </div>
+          )}
+        </Form.Item>
+        <Form.Item name="targetRepo" label="目标仓库" tooltip="选择已有仓库或输入 owner/repo 格式的新仓库名">
+          <div className="flex gap-2">
+            <Select
+              className="flex-1"
+              showSearch
+              allowClear
+              filterOption={(_input, _option) => true}
+              placeholder="选择 GitHub 仓库或输入 owner/repo"
+              loading={loadingRepos}
+              onChange={onRepoChange}
+            >
+              <Select.Option value="self">自测 (self)</Select.Option>
+              {githubRepos.map(repo => (
+                <Select.Option key={repo.fullName} value={repo.fullName}>
+                  <span>
+                    {repo.fullName}
+                    {repo.isPrivate && <Tag className="ml-2" color="orange" style={{ fontSize: '10px', padding: '0 4px' }}>private</Tag>}
+                  </span>
+                </Select.Option>
+              ))}
+            </Select>
+            <Button onClick={onOpenCreateRepo}>+ 新建</Button>
+          </div>
+        </Form.Item>
+        <Form.Item name="targetBranch" label="目标分支">
+          <Select
+            showSearch
+            allowClear
+            placeholder={loadingBranches ? "加载中..." : githubBranches.length > 0 ? "选择已有分支或输入新分支名" : "输入分支名，如 main、develop"}
+            loading={loadingBranches}
+            disabled={loadingBranches}
+            mode={undefined}
+          >
+            {githubBranches.map(branch => (
+              <Select.Option key={branch} value={branch}>
+                {branch}
+              </Select.Option>
+            ))}
+          </Select>
+        </Form.Item>
+        <div className="flex justify-end gap-3 mt-6">
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" htmlType="submit" loading={loading}>
+            创建
+          </Button>
+        </div>
+      </Form>
+    </Modal>
+  )
+}
+
+// 飞书文档选择抽屉
+function FeishuDocDrawer({
+  open,
+  onClose,
+  wikiSpaces,
+  loadingSpaces,
+  currentFolder,
+  onBack,
+  onToggleSelect,
+  selectedDocUrls,
+}: {
+  open: boolean
+  onClose: () => void
+  wikiSpaces: any[]
+  loadingSpaces: boolean
+  currentFolder: string
+  onBack: () => void
+  onToggleSelect: (doc: any) => void
+  selectedDocUrls: string[]
+}) {
+  return (
+    <Drawer
+      title="选择飞书文档"
+      placement="right"
+      width={400}
+      onClose={onClose}
+      open={open}
+      footer={
+        <div className="flex justify-end">
+          <Button type="primary" onClick={onClose}>确定</Button>
+        </div>
+      }
+    >
+      {currentFolder && (
+        <Button size="small" onClick={onBack} className="mb-3">
+          ← 返回上级
+        </Button>
+      )}
+      {loadingSpaces ? (
+        <div className="flex justify-center py-8">
+          <Spin />
+        </div>
+      ) : wikiSpaces.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">暂无文档</div>
+      ) : (
+        <div className="space-y-1">
+          {wikiSpaces.map((item: any) => {
+            const isFolder = item.type === 'folder'
+            const url = item.url?.replace('lanshanteam.feishu.cn', 'feishu.cn')
+            const isSelected = selectedDocUrls.includes(url)
+            return (
+              <div
+                key={item.token}
+                className={`flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}
+                onClick={() => onToggleSelect(item)}
+              >
+                <span>{isFolder ? '📁' : '📄'}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm truncate">{item.name}</div>
+                  <div className="text-xs text-gray-400">{isFolder ? '文件夹' : '文档'}</div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Drawer>
   )
 }

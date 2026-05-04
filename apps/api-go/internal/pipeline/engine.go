@@ -319,13 +319,21 @@ func buildStageInput(run model.PipelineRun, stage model.StageRun, artifacts []mo
 }
 
 func buildRunRequirement(run model.PipelineRun) map[string]any {
-	return map[string]any{
+	req := map[string]any{
 		"title":           run.Title,
 		"requirementText": run.RequirementText,
 		"targetRepo":      run.TargetRepo,
 		"targetBranch":    run.TargetBranch,
 		"workBranch":      run.WorkBranch,
 	}
+	// 解析飞书文档 URL
+	if run.SelectedDocUrls != "" {
+		var urls []string
+		if err := json.Unmarshal([]byte(run.SelectedDocUrls), &urls); err == nil && len(urls) > 0 {
+			req["selectedDocUrls"] = urls
+		}
+	}
+	return req
 }
 
 func latestArtifactsByType(artifacts []model.Artifact) map[string]any {

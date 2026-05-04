@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
+import { useSearch } from '@tanstack/react-router'
 import Sidebar from '../components/Sidebar'
+import XMarkdown from '@ant-design/x-markdown'
 import {
   Card,
   Progress,
@@ -12,6 +14,7 @@ import {
   Form,
   Input,
   Select,
+  Table,
 } from 'antd'
 import {
   PlusOutlined,
@@ -19,16 +22,19 @@ import {
   ReloadOutlined,
   PlayCircleOutlined,
   StopOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  PlayCircleOutlined as ExecuteIcon,
 } from '@ant-design/icons'
 
 // API Base
 const API_BASE = '/api'
 
-// Pipeline Run 类型
+// Pipeline Run 类型 (与 API 响应一致，使用 camelCase)
 interface PipelineRun {
-  ID: string
+  id: string
   title: string
-  templateID: string
+  templateId: string
   status: string
   currentStageKey: string
   targetRepo: string
@@ -55,7 +61,12 @@ interface StageRun {
 // Pipeline Timeline 类型
 interface PipelineTimeline {
   run: PipelineRun
+  current?: {
+    checkpoint?: { id: string; checkpointType: string; status: string; createdAt: string }
+    artifact?: { title: string; contentText: string; contentJson?: string }
+  }
   stages: StageRun[]
+  artifacts?: { artifactType: string; contentJson?: string }[]
   summary: {
     totalStages: number
     completedStages: number
@@ -66,6 +77,17 @@ interface PipelineTimeline {
     finishedAt?: string
     durationMS?: number
   }
+}
+
+// 变更项类型
+interface ChangeSetItem {
+  filePath: string
+  changeType?: string
+  reason?: string
+  proposedPatch?: string
+  contextIncluded?: boolean
+  originalContent?: string
+  proposedDiff?: string
 }
 
 // 阶段状态映射
@@ -91,14 +113,34 @@ const stageNameMap: Record<string, string> = {
 }
 
 export default function Monitoring() {
+  const searchParams = useSearch({ from: '/monitoring' })
   const [loading, setLoading] = useState(false)
   const [pipelines, setPipelines] = useState<PipelineRun[]>([])
   const [selectedPipeline, setSelectedPipeline] = useState<PipelineTimeline | null>(null)
-  const [loadingDetail, setLoadingDetail] = useState(false)
+  const [_loadingDetail, setLoadingDetail] = useState(false)
   const [createModalVisible, setCreateModalVisible] = useState(false)
   const [createLoading, setCreateLoading] = useState(false)
   const [templates, setTemplates] = useState<{ID: string, name: string}[]>([])
   const [form] = Form.useForm()
+  
+  // 审批相关状态
+  const [approvalModalVisible, setApprovalModalVisible] = useState(false)
+  const [approvalComment, setApprovalComment] = useState('')
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false)
+  const [approvalData, setApprovalData] = useState<{
+    checkpointId: string
+    artifact: { title: string; contentText: string; contentJson?: string } | null
+    changeSet: ChangeSetItem[]
+  } | null>(null)
+  const [showChangeSet, setShowChangeSet] = useState(false)
+  const [executingChanges, setExecutingChanges] = useState(false)
+  
+  // 处理 URL 参数自动打开审批弹窗
+  useEffect(() => {
+    if (searchParams.runId && searchParams.action === 'approve') {
+      openApprovalModal(searchParams.runId)
+    }
+  }, [])
   
   const sidebarWidth = 80
 
@@ -134,9 +176,16 @@ export default function Monitoring() {
 
   // 加载流水线详情
   const loadPipelineDetail = async (id: string) => {
+    // 防御性检查：确保 id 是有效的非空字符串
+    const safeId = String(id || '').trim()
+    if (!safeId || safeId === 'undefined' || safeId === 'null') {
+      console.warn('[loadPipelineDetail] Invalid id:', id)
+      setSelectedPipeline(null)
+      return
+    }
     setLoadingDetail(true)
     try {
-      const res = await fetch(`${API_BASE}/pipeline-runs/${id}/timeline`)
+      const res = await fetch(`${API_BASE}/pipeline-runs/${safeId}/timeline`)
       if (res.ok) {
         const data = await res.json()
         setSelectedPipeline(data.data)
@@ -193,6 +242,186 @@ export default function Monitoring() {
     }
   }
 
+  // 打开审批弹窗
+  const openApprovalModal = async (pipelineId: string) => {
+    // 先加载流水线详情，确保 selectedPipeline 有值
+    await loadPipelineDetail(pipelineId)
+    try {
+      // 使用 /timeline 接口获取完整数据，包括 checkpoint 和 artifact
+      const res = await fetch(`${API_BASE}/pipeline-runs/${pipelineId}/timeline`)
+      if (res.ok) {
+        const data = await res.json()
+        const timeline = data.data
+        
+        // 查找当前等待审批的 checkpoint (status=pending)
+        const waitingCheckpoint = timeline?.checkpoints?.find(
+          (cp: any) => cp.status === 'pending'
+        )
+        
+        if (waitingCheckpoint) {
+          // 从 timeline 的 artifacts 中找到对应的 artifact
+          const checkpointArtifact = timeline?.artifacts?.find(
+            (a: any) => a.stageRunId === waitingCheckpoint.stageRunId
+          )
+          
+          let changeSet: ChangeSetItem[] = []
+          if (checkpointArtifact?.contentJson) {
+            try {
+              const jsonData = JSON.parse(checkpointArtifact.contentJson)
+              if (Array.isArray(jsonData.changeSet)) {
+                changeSet = jsonData.changeSet
+              }
+            } catch {}
+          }
+          
+          setApprovalData({
+            checkpointId: waitingCheckpoint.id,
+            artifact: checkpointArtifact ? {
+              title: checkpointArtifact.title,
+              contentText: checkpointArtifact.contentText,
+              contentJson: checkpointArtifact.contentJson,
+            } : null,
+            changeSet,
+          })
+          setApprovalModalVisible(true)
+        } else {
+          message.warning('当前没有待审批的检查点')
+        }
+      }
+    } catch (err) {
+      message.error('加载审批数据失败')
+    }
+  }
+
+  // 审批通过
+  const handleApprove = async () => {
+    if (!approvalData) return
+    setApprovalSubmitting(true)
+    try {
+      const res = await fetch(`${API_BASE}/checkpoints/${approvalData.checkpointId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: approvalComment }),
+      })
+      if (res.ok) {
+        message.success('审批已通过')
+        setApprovalModalVisible(false)
+        setApprovalComment('')
+        loadPipelineDetail(selectedPipeline?.run.id || '')
+      } else {
+        message.error('审批失败')
+      }
+    } catch {
+      message.error('审批失败')
+    } finally {
+      setApprovalSubmitting(false)
+    }
+  }
+
+  // 审批驳回
+  const handleReject = async () => {
+    if (!approvalData) return
+    setApprovalSubmitting(true)
+    try {
+      const res = await fetch(`${API_BASE}/checkpoints/${approvalData.checkpointId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: approvalComment }),
+      })
+      if (res.ok) {
+        message.success('已驳回')
+        setApprovalModalVisible(false)
+        setApprovalComment('')
+        loadPipelineDetail(selectedPipeline?.run.id || '')
+      } else {
+        message.error('驳回失败')
+      }
+    } catch {
+      message.error('驳回失败')
+    } finally {
+      setApprovalSubmitting(false)
+    }
+  }
+
+  const handleExecuteChanges = async () => {
+    if (!approvalData || !selectedPipeline) return
+    setApprovalSubmitting(true)
+    try {
+      const res = await fetch(`${API_BASE}/pipeline-runs/${selectedPipeline.run.id}/execute-changes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changeSet: approvalData.changeSet }),
+      })
+      if (res.ok) {
+        const result = await res.json()
+        message.success(result.data?.summary || '变更执行完成')
+        setApprovalModalVisible(false)
+      } else {
+        message.error('执行变更失败')
+      }
+    } catch {
+      message.error('执行变更失败')
+    } finally {
+      setApprovalSubmitting(false)
+    }
+  }
+
+  // 直接执行变更（无需先审批）
+  const executeChangesDirectly = async (pipelineId: string) => {
+    try {
+      setExecutingChanges(true)
+      // 获取流水线当前的变更计划
+      const res = await fetch(`${API_BASE}/pipeline-runs/${pipelineId}/timeline`)
+      if (!res.ok) {
+        message.error('获取变更计划失败')
+        return
+      }
+      const data = await res.json()
+      const timeline = data.data
+      
+      // 找到 codegen 阶段的 artifact 获取 changeSet
+      const codegenArtifact = timeline?.artifacts?.find(
+        (a: any) => a.stageKey === 'codegen' || a.artifactType === 'code_diff'
+      )
+      
+      let changeSet: ChangeSetItem[] = []
+      if (codegenArtifact?.contentJson) {
+        try {
+          const jsonData = JSON.parse(codegenArtifact.contentJson)
+          if (Array.isArray(jsonData.changeSet)) {
+            changeSet = jsonData.changeSet
+          } else if (Array.isArray(jsonData)) {
+            changeSet = jsonData
+          }
+        } catch {}
+      }
+      
+      if (changeSet.length === 0) {
+        message.warning('未找到变更计划')
+        return
+      }
+      
+      // 执行变更
+      const execRes = await fetch(`${API_BASE}/pipeline-runs/${pipelineId}/execute-changes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changeSet }),
+      })
+      
+      if (execRes.ok) {
+        const result = await execRes.json()
+        message.success(result.data?.summary || '变更执行完成')
+        loadPipelineDetail(pipelineId)
+      } else {
+        message.error('执行变更失败')
+      }
+    } catch {
+      message.error('执行变更失败')
+    } finally {
+      setExecutingChanges(false)
+    }
+  }
+
   // 创建流水线
   const createPipeline = async (values: { title: string; templateID: string; requirementText: string; targetRepo?: string; targetBranch?: string }) => {
     setCreateLoading(true)
@@ -209,8 +438,8 @@ export default function Monitoring() {
         form.resetFields()
         loadPipelines()
         // 自动打开新创建的流水线详情
-        if (data.data?.run?.ID || data.data?.id) {
-          const newId = data.data.run?.ID || data.data.id
+        if (data.data?.run?.id || data.data?.id) {
+          const newId = data.data.run?.id || data.data.id
           loadPipelineDetail(newId)
         }
       } else {
@@ -247,7 +476,7 @@ export default function Monitoring() {
   }
 
   // 获取阶段状态 (done/running/pending)
-  const getPipelineStepStatus = (stage: StageRun, stages: StageRun[]) => {
+  const getPipelineStepStatus = (stage: StageRun) => {
     if (stage.status === 'succeeded') return 'done'
     if (stage.status === 'running' || stage.status === 'queued' || stage.status === 'waiting_approval') return 'running'
     return 'pending'
@@ -301,16 +530,16 @@ export default function Monitoring() {
               <div className="space-y-2 max-h-[calc(100vh-280px)] overflow-y-auto">
                 {pipelines.map((pipeline) => {
                   const config = statusConfig[pipeline.status] || statusConfig.draft
-                  const isSelected = selectedPipeline?.run.ID === pipeline.ID
+                  const isSelected = selectedPipeline?.run?.id === pipeline.id
                   return (
                     <div
-                      key={pipeline.ID}
+                      key={pipeline.id}
                       className={`p-3 rounded-lg cursor-pointer transition-all ${
                         isSelected 
                           ? 'bg-primary/10 border border-primary' 
                           : 'bg-surface-container-low hover:bg-surface-container-high'
                       }`}
-                      onClick={() => loadPipelineDetail(pipeline.ID)}
+                      onClick={() => loadPipelineDetail(pipeline.id)}
                     >
                       <div className="flex justify-between items-start mb-1">
                         <div className="font-medium text-on-surface text-sm truncate max-w-[180px]" title={pipeline.title}>
@@ -386,7 +615,7 @@ export default function Monitoring() {
                       <Button 
                         type="primary" 
                         icon={<PlayCircleOutlined />} 
-                        onClick={() => startPipeline(selectedPipeline.run.ID)}
+                        onClick={() => startPipeline(selectedPipeline.run.id)}
                       >
                         启动
                       </Button>
@@ -394,18 +623,39 @@ export default function Monitoring() {
                     {selectedPipeline.run.status === 'running' && (
                       <Button 
                         icon={<PauseCircleOutlined />} 
-                        onClick={() => pausePipeline(selectedPipeline.run.ID)}
+                        onClick={() => pausePipeline(selectedPipeline.run.id)}
                       >
                         暂停
+                      </Button>
+                    )}
+                    {/* 交付阶段显示执行变更按钮 */}
+                    {selectedPipeline.run.status === 'running' && 
+                     selectedPipeline.summary.currentStageKey === 'delivery' && (
+                      <Button 
+                        type="primary"
+                        icon={<PlayCircleOutlined />} 
+                        onClick={() => executeChangesDirectly(selectedPipeline.run.id)}
+                        loading={executingChanges}
+                      >
+                        执行变更
                       </Button>
                     )}
                     {['running', 'queued', 'paused'].includes(selectedPipeline.run.status) && (
                       <Button 
                         danger 
                         icon={<StopOutlined />} 
-                        onClick={() => terminatePipeline(selectedPipeline.run.ID)}
+                        onClick={() => terminatePipeline(selectedPipeline.run.id)}
                       >
                         终止
+                      </Button>
+                    )}
+                    {selectedPipeline.run.status === 'waiting_approval' && (
+                      <Button 
+                        type="primary" 
+                        icon={<CheckCircleOutlined />} 
+                        onClick={() => openApprovalModal(selectedPipeline.run.id)}
+                      >
+                        审批
                       </Button>
                     )}
                   </div>
@@ -419,7 +669,7 @@ export default function Monitoring() {
                   </div>
                   <div className="space-y-4">
                     {selectedPipeline.stages.map((stage, idx) => {
-                      const stepStatus = getPipelineStepStatus(stage, selectedPipeline.stages)
+                      const stepStatus = getPipelineStepStatus(stage)
                       const stageConfig = getStageStatus(stage)
                       return (
                         <div key={stage.ID} className="flex gap-4">
@@ -508,9 +758,9 @@ export default function Monitoring() {
               rules={[{ required: true, message: '请选择模板' }]}
             >
               <Select placeholder="请选择模板">
-                {templates.map(t => (
-                  <Select.Option key={t.ID} value={t.ID}>
-                    {t.name || t.ID}
+                {templates.map((t, idx) => (
+                  <Select.Option key={t?.ID || `tmpl-${idx}`} value={t?.ID || ''}>
+                    {t?.name || t?.ID || '未知模板'}
                   </Select.Option>
                 ))}
               </Select>
@@ -545,6 +795,124 @@ export default function Monitoring() {
               </div>
             </Form.Item>
           </Form>
+        </Modal>
+
+        {/* 审批弹窗 */}
+        <Modal
+          title={`审批 - ${approvalData?.artifact?.title || '代码变更计划'}`}
+          open={approvalModalVisible}
+          onCancel={() => {
+            setApprovalModalVisible(false)
+            setApprovalComment('')
+          }}
+          width={900}
+          footer={null}
+        >
+          <div className="space-y-4">
+            {/* 审批意见 */}
+            <div>
+              <label className="block text-sm font-medium text-on-surface-variant mb-1">审批意见</label>
+              <Input.TextArea
+                value={approvalComment}
+                onChange={(e) => setApprovalComment(e.target.value)}
+                placeholder="输入审批意见..."
+                rows={3}
+              />
+            </div>
+
+            {/* 操作按钮 */}
+            <div className="flex justify-between">
+              <div>
+                {approvalData && approvalData.changeSet.length > 0 && (
+                  <Space>
+                    <Button
+                      icon={<ExecuteIcon />}
+                      onClick={() => setShowChangeSet(!showChangeSet)}
+                    >
+                      {showChangeSet ? '隐藏变更' : '查看变更'}
+                    </Button>
+                    <Button
+                      type="default"
+                      icon={<PlayCircleOutlined />}
+                      onClick={handleExecuteChanges}
+                      loading={approvalSubmitting}
+                    >
+                      执行变更
+                    </Button>
+                  </Space>
+                )}
+              </div>
+              <Space>
+                <Button
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  onClick={handleReject}
+                  loading={approvalSubmitting}
+                >
+                  驳回
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<CheckCircleOutlined />}
+                  onClick={handleApprove}
+                  loading={approvalSubmitting}
+                >
+                  通过
+                </Button>
+              </Space>
+            </div>
+
+            {/* 审批报告内容 */}
+            {approvalData?.artifact?.contentText && (
+              <div className="mt-4">
+                <div className="text-sm font-medium text-on-surface-variant mb-2">审批报告</div>
+                <div className="border border-outline-variant rounded-lg p-4 bg-surface-container-low max-h-64 overflow-y-auto">
+                  <XMarkdown
+                    className="prose prose-sm max-w-none"
+                    theme={{
+                      h1: 'text-lg font-bold text-on-surface mt-3 mb-2',
+                      h2: 'text-base font-bold text-on-surface mt-3 mb-2',
+                      h3: 'text-sm font-semibold text-on-surface mt-2 mb-1',
+                      p: 'text-sm text-on-surface-variant leading-relaxed mb-2',
+                      ul: 'list-disc pl-5 mb-2 space-y-1',
+                      ol: 'list-decimal pl-5 mb-2 space-y-1',
+                      li: 'text-sm text-on-surface-variant',
+                      code: 'bg-surface-container-high px-1 py-0.5 rounded text-xs font-mono',
+                      pre: 'bg-surface-container-high p-3 rounded-lg overflow-x-auto mb-2',
+                      blockquote: 'border-l-4 border-primary pl-4 italic text-on-surface-variant',
+                      table: 'w-full border-collapse mb-2',
+                      th: 'border border-outline-variant p-2 bg-surface-container-high text-left',
+                      td: 'border border-outline-variant p-2',
+                    }}
+                    {...({ content: approvalData.artifact.contentText } as any)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 变更预览表格 */}
+            {showChangeSet && approvalData && approvalData.changeSet.length > 0 && (
+              <Table
+                size="small"
+                dataSource={approvalData.changeSet.map((item, idx) => ({ ...item, key: idx }))}
+                columns={[
+                  { title: '文件', dataIndex: 'filePath', key: 'filePath', width: 200, ellipsis: true },
+                  { 
+                    title: '类型', 
+                    dataIndex: 'changeType', 
+                    key: 'changeType',
+                    width: 80,
+                    render: (type: string) => (
+                      <Tag color={type === 'create' ? 'green' : 'blue'}>{type || 'modify'}</Tag>
+                    )
+                  },
+                  { title: '说明', dataIndex: 'reason', key: 'reason', ellipsis: true }
+                ]}
+                pagination={false}
+                scroll={{ y: 300 }}
+              />
+            )}
+          </div>
         </Modal>
       </main>
     </div>

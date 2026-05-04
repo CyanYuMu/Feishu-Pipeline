@@ -19,7 +19,7 @@ interface DepartmentInfo {
 
 export default function NewRequirement() {
   const navigate = useNavigate()
-  const searchParams = useSearch({ from: '/new-requirement' })
+  useSearch({ from: '/new-requirement' })
   const [form] = Form.useForm()
   const [teams, setTeams] = useState<{ value: string; label: string }[]>([])
   const [selectedTeams, setSelectedTeams] = useState<string[]>([])
@@ -100,8 +100,7 @@ export default function NewRequirement() {
       return 
     }
 
-    console.log('提交的 Leaders:', leaders)
-
+    
     // 获取表单数据
     const formData = form.getFieldsValue()
     const priority = formData['priority'] || ''
@@ -110,8 +109,7 @@ export default function NewRequirement() {
     const deadlineStr = targetDate ? `，截止时间：${targetDate.format('YYYY-MM-DD')}` : ''
     const autoTitle = priority && businessType ? `[${priority}]${businessType}需求` : ''
     const requirementTitle = autoTitle || formData['requirement_title'] || '未命名需求'
-    console.log('需求标题:', requirementTitle)
-
+    
     setSubmitting(true)
     try {
       let docUrl = ''
@@ -245,7 +243,6 @@ export default function NewRequirement() {
                     break
                     
                   case 'tool_result':
-                    console.log('[DEBUG] tool_result event:', JSON.stringify(data))
                     // 提取 swaggerUrl（Swagger UI 页面链接）
                     if (data.name === 'saveOpenApiSpec' && data.result?.swaggerUrl) {
                       swaggerUrl = data.result.swaggerUrl
@@ -254,7 +251,7 @@ export default function NewRequirement() {
                       if (match) {
                         specId = match[1]
                       }
-                      console.log('[DEBUG] swaggerUrl extracted:', swaggerUrl, 'specId:', specId)
+                      
                     }
                     // 提取飞书文档链接
                     if (data.name === 'createFeishuDocument' && data.result?.url) {
@@ -263,7 +260,7 @@ export default function NewRequirement() {
                     // 提取接口测试结果
                     if (data.name === 'testApi' && data.result) {
                       testResult = data.result
-                      console.log('[DEBUG] testApi result:', JSON.stringify(testResult))
+                      
                     }
                     break
                 }
@@ -326,9 +323,6 @@ export default function NewRequirement() {
           messageContent += '\n' + icon + ' 接口测试结果：共 ' + s.total + ' 个用例，通过 ' + s.passed + ' 个，失败 ' + s.failed + ' 个\n'
         }
                 
-        console.log('[DEBUG] 发送飞书消息前检查 - docUrl:', docUrl, 'swaggerUrl:', swaggerUrl, 'testResult:', !!testResult)
-        console.log('[DEBUG] 消息内容:', messageContent)
-        
         messageContent += `\n请及时查看并处理！`
         
         const content = JSON.stringify({ text: messageContent })
@@ -367,9 +361,9 @@ export default function NewRequirement() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updateData),
           })
-          console.log('[DEBUG] 资产关联信息已更新')
+          
         } catch (err) {
-          console.error('[DEBUG] 更新资产关联信息失败:', err)
+          
         }
       }
       
@@ -384,9 +378,9 @@ export default function NewRequirement() {
               description: description,
             }),
           })
-          console.log('[DEBUG] 项目-需求关联已创建')
+          
         } catch (err) {
-          console.error('[DEBUG] 创建项目-需求关联失败:', err)
+          
         }
       }
       
@@ -512,13 +506,10 @@ export default function NewRequirement() {
           if (data.success && data.data?.data?.items) {
             allItems.push(...data.data.data.items)
             pageToken = data.data.data.page_token
-            console.log(`获取到 ${data.data.data.items.length} 个部门, has_more: ${data.data.data.has_more}`)
           } else {
             break
           }
         } while (pageToken)
-        
-        console.log('获取到的所有部门数量:', allItems.length)
         
         if (allItems.length === 0) {
           setLoadingTeams(false)
@@ -530,8 +521,6 @@ export default function NewRequirement() {
         const allDeptIds = allItems
           .map((dept: any) => dept.open_department_id || dept.department_id)
           .filter((id: string) => id)
-        
-        console.log('部门 IDs:', allDeptIds)
         
         // 分批调用批量获取部门信息接口（最多 50 个一批）
         const batchSize = 50
@@ -555,7 +544,6 @@ export default function NewRequirement() {
           }
         }
         
-        console.log('批量获取的部门详情数量:', allDepartments.length)
         
         // 处理部门数据，提取名称和 leader
         const departments: DepartmentInfo[] = allDepartments.map((dept: any) => {
@@ -568,8 +556,6 @@ export default function NewRequirement() {
           const leaderUserId = dept.leaders?.find((l: any) => l.leaderType === 1)?.leaderID || dept.leader_user_id
           return { id, label, leaderUserId }
         })
-        
-        console.log('处理的部门数据:', departments)
         
         const deptMap = new Map<string, DepartmentInfo>()
         departments.forEach(dept => deptMap.set(dept.id, dept))

@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 
 	"feishu-pipeline/apps/api-go/internal/model"
 	"feishu-pipeline/apps/api-go/internal/service"
@@ -76,7 +78,12 @@ func (c *PipelineController) CreateRun(ctx *gin.Context) {
 		writeError(ctx, http.StatusBadRequest, err)
 		return
 	}
-	item, err := c.pipelineService.CreatePipelineRun(ctx.Request.Context(), service.CreatePipelineRunInput{TemplateID: req.TemplateID, Title: req.Title, RequirementText: req.RequirementText, TargetRepo: req.TargetRepo, TargetBranch: req.TargetBranch, CreatedBy: currentUserID(ctx)})
+	// 验证：需求描述和飞书文档至少选一
+	if strings.TrimSpace(req.RequirementText) == "" && len(req.SelectedDocUrls) == 0 {
+		writeError(ctx, http.StatusBadRequest, errors.New("需求描述和飞书文档至少选一"))
+		return
+	}
+	item, err := c.pipelineService.CreatePipelineRun(ctx.Request.Context(), service.CreatePipelineRunInput{TemplateID: req.TemplateID, Title: req.Title, RequirementText: req.RequirementText, TargetRepo: req.TargetRepo, TargetBranch: req.TargetBranch, SelectedDocUrls: req.SelectedDocUrls, CreatedBy: currentUserID(ctx)})
 	if err != nil {
 		writeError(ctx, http.StatusBadRequest, err)
 		return
@@ -406,6 +413,52 @@ func (c *PipelineController) RejectCheckpoint(ctx *gin.Context) {
 		return
 	}
 	writeSuccess(ctx, http.StatusOK, pipelinetype.NewCheckpointResponse(item))
+}
+
+// ExecuteChanges
+// @tags Pipeline
+// @summary 执行代码变更
+// @description 审批通过后执行变更计划，将代码变更写入 GitHub 仓库。
+// @router /api/pipeline-runs/{id}/execute-changes [POST]
+// @accept application/json
+// @produce application/json
+// @param id path string true "流水线运行ID"
+// @param req body pipelinetype.ExecuteChangesRequest true "变更执行参数"
+// @success 200 {object} pipelinetype.ExecuteChangesEnvelope
+// @failure 400 {object} pipelinetype.ErrorEnvelope
+func (c *PipelineController) ExecuteChanges(ctx *gin.Context) {
+	var req pipelinetype.ExecuteChangesRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+	changeSet := make([]map[string]any, 0, len(req.ChangeSet))
+	for _, item := range req.ChangeSet {
+		changeSet = append(changeSet, map[string]any{
+			"filePath":         item.FilePath,
+			"changeType":       item.ChangeType,
+			"reason":           item.Reason,
+			"proposedPatch":    item.ProposedPatch,
+			"contextIncluded":  item.ContextIncluded,
+			"originalContent":  item.OriginalContent,
+			"proposedDiff":     item.ProposedDiff,
+		})
+	}
+	params := service.ExecuteChangesParams{
+		ChangeSet:   changeSet,
+		CommitterID: currentUserID(ctx),
+		Token:       req.Token,
+	}
+	result, err := c.pipelineService.ExecuteChanges(ctx.Request.Context(), ctx.Param("id"), params)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+	writeSuccess(ctx, http.StatusOK, pipelinetype.ExecuteChangesResponse{
+		AppliedFiles: result.AppliedFiles,
+		FailedFiles:  result.FailedFiles,
+		Summary:      result.Summary,
+	})
 }
 
 func mapRunStatus(item model.PipelineRun) pipelinetype.RunStatusResponse {

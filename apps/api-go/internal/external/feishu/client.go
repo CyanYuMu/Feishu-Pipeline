@@ -119,6 +119,10 @@ func (c *Client) AppID() string {
 	return c.cfg.AppID
 }
 
+func (c *Client) AppSecret() string {
+	return c.cfg.AppSecret
+}
+
 func (c *Client) OAuthScope() string {
 	return c.cfg.OAuthScope
 }
@@ -716,6 +720,137 @@ func (c *Client) SendTaskMessage(ctx context.Context, task model.Task) (SendResu
 		Status:     "accepted",
 		RemoteID:   stringValue(resp.Data.MessageId),
 		RawPayload: content,
+	}, nil
+}
+
+// ApprovalCardPayload 需求确认卡片内容结构
+type ApprovalCardPayload struct {
+	Title       string // 需求标题
+	Summary     string // 需求摘要
+	Requirement string // 详细需求描述
+	SessionID   string // 会话ID，用于跳转链接
+	RunID       string // Pipeline Run ID
+}
+
+// SendApprovalCardMessage 发送需求确认卡片消息
+// 卡片包含需求摘要信息和 Approve/Reject 按钮，用户点击后触发回调
+func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, payload ApprovalCardPayload) (SendResult, error) {
+	if !c.Enabled() || strings.TrimSpace(openID) == "" {
+		return SendResult{
+			Channel:  "feishu-bot",
+			Receiver: openID,
+			Status:   "mock_sent",
+			RemoteID: "mock_card_" + payload.SessionID,
+			RawPayload: fmt.Sprintf("mock card for requirement: %s", payload.Title),
+		}, nil
+	}
+
+	// 获取前端 URL 用于跳转
+	frontendURL := c.cfg.BaseURL
+	if frontendURL == "" {
+		frontendURL = "http://localhost:5173"
+	}
+	detailURL := fmt.Sprintf("%s/sessions/%s", frontendURL, payload.SessionID)
+
+	// 构建卡片 JSON（飞书交互卡片格式）
+	cardContent := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"elements": []any{
+			// 标题区域
+			map[string]any{
+				"tag": "markdown",
+				"content": fmt.Sprintf("## 📋 **%s**", payload.Title),
+			},
+			// 分隔线
+			map[string]any{
+				"tag": "hr",
+			},
+			// 需求摘要
+			map[string]any{
+				"tag": "markdown",
+				"content": fmt.Sprintf("**📝 需求摘要**\n%s", payload.Summary),
+			},
+			// 详细描述（如果有）
+			map[string]any{
+				"tag": "markdown",
+				"content": fmt.Sprintf("**📄 详细需求**\n%s", payload.Requirement),
+			},
+			// 分隔线
+			map[string]any{
+				"tag": "hr",
+			},
+			// 提示信息
+			map[string]any{
+				"tag": "markdown",
+				"content": "⚠️ 请确认需求细节是否完整准确，点击下方按钮进行审批",
+			},
+			// 按钮区域
+			map[string]any{
+				"tag": "action",
+				"actions": []any{
+					map[string]any{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "✅ 确认发布",
+						},
+						"type": "primary",
+						"intent": "approve",
+					},
+					map[string]any{
+						"tag": "button",
+							"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "❌ 补充信息",
+						},
+						"type": "danger",
+						"intent": "reject",
+					},
+				},
+			},
+			// 跳转链接
+			map[string]any{
+				"tag": "action",
+				"actions": []any{
+					map[string]any{
+						"tag":   "link",
+						"text":  map[string]any{"tag": "plain_text", "content": "🔗 查看详情"},
+						"value": detailURL,
+					},
+				},
+			},
+		},
+	}
+
+	cardJSON, err := json.Marshal(cardContent)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("build card content failed: %v", err)
+	}
+
+	resp, err := c.sdk.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(c.cfg.ReceiveIDType).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(openID).
+			MsgType("interactive").
+			Content(string(cardJSON)).
+			Build()).
+		Build())
+	if err != nil {
+		return SendResult{}, err
+	}
+	if !resp.Success() {
+		return SendResult{}, fmt.Errorf("send approval card failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	return SendResult{
+		Channel:    "feishu-bot",
+		Receiver:   openID,
+		Status:     "accepted",
+		RemoteID:   stringValue(resp.Data.MessageId),
+		RawPayload: string(cardJSON),
 	}, nil
 }
 

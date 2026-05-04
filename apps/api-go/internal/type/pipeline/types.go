@@ -7,11 +7,12 @@ import (
 )
 
 type CreatePipelineRunRequest struct {
-	TemplateID      string `json:"templateId"`
-	Title           string `json:"title" binding:"required"`
-	RequirementText string `json:"requirementText" binding:"required"`
-	TargetRepo      string `json:"targetRepo"`
-	TargetBranch    string `json:"targetBranch"`
+	TemplateID      string   `json:"templateId"`
+	Title           string   `json:"title" binding:"required"`
+	RequirementText string   `json:"requirementText"`
+	TargetRepo      string   `json:"targetRepo"`
+	TargetBranch    string   `json:"targetBranch"`
+	SelectedDocUrls []string `json:"selectedDocUrls"`
 }
 
 type CreatePipelineRunFromSessionRequest struct {
@@ -27,6 +28,33 @@ type UpdateCheckpointDecisionRequest struct {
 
 type UpdateRunStatusRequest struct {
 	Status string `json:"status"`
+}
+
+// ExecuteChangesRequest 变更执行请求
+type ExecuteChangesRequest struct {
+	ChangeSet []ChangeItemRequest `json:"changeSet" binding:"required"`
+	Token     string              `json:"token"`
+}
+
+type ChangeItemRequest struct {
+	FilePath        string `json:"filePath" binding:"required"`
+	ChangeType      string `json:"changeType"`
+	Reason          string `json:"reason"`
+	ProposedPatch   string `json:"proposedPatch"`
+	ContextIncluded bool   `json:"contextIncluded"`
+	OriginalContent string `json:"originalContent"`
+	ProposedDiff    string `json:"proposedDiff"`
+}
+
+type ExecuteChangesResponse struct {
+	AppliedFiles []string           `json:"appliedFiles"`
+	FailedFiles  []map[string]any   `json:"failedFiles"`
+	Summary      string             `json:"summary"`
+}
+
+type ExecuteChangesEnvelope struct {
+	Data  ExecuteChangesResponse `json:"data,omitempty"`
+	Error string                 `json:"error,omitempty"`
 }
 
 type RunStageListResponse struct {

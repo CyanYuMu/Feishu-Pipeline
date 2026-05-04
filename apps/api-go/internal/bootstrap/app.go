@@ -101,11 +101,30 @@ func NewApplication(ctx context.Context, configPath string, version string) (*Ap
 		BaseURL:              cfg.App.BaseURL,
 	})
 
-	authService := service.NewAuthService(repository, feishuClient, time.Duration(cfg.App.SessionTTLHours)*time.Hour)
+	var authService *service.AuthService
+	if cfg.GitHub.Enabled && cfg.GitHub.ClientID != "" && cfg.GitHub.ClientSecret != "" {
+		authService = service.NewAuthServiceWithGitHub(
+			repository, feishuClient,
+			time.Duration(cfg.App.SessionTTLHours)*time.Hour,
+			cfg.GitHub.ClientID,
+			cfg.GitHub.ClientSecret,
+			cfg.GitHub.RedirectURI,
+		)
+		log.Printf("github oauth enabled: client_id=%s", cfg.GitHub.ClientID)
+	} else {
+		authService = service.NewAuthService(repository, feishuClient, time.Duration(cfg.App.SessionTTLHours)*time.Hour)
+		log.Printf("github oauth disabled")
+	}
+
+	// 启动飞书 WebSocket 长连接客户端（用于接收卡片回调）
+	StartFeishuWSClient(ctx, feishuClient, authService)
+
 	healthService := service.NewHealthService(cfg.App.Name, cfg.App.Version)
 	sessionService := service.NewSessionService(repository, authService, aiClient)
 	taskService := service.NewTaskService(repository, feishuClient)
 	adminService := service.NewAdminService(repository)
+	adminController := controller.NewAdminController(adminService)
+	adminController.SetFeishuClient(feishuClient)
 	pipelineProvider := pipeline.NewTextGenerationProvider(cfg.AI.Provider, aiModel, aiClient)
 	pipelineExecutor := pipeline.NewSequentialExecutor(pipeline.WithAgentRunner(pipeline.NewAgentRunner(pipelineProvider, pipeline.DefaultPromptRegistry())))
 	pipelineService := service.NewPipelineService(repository, service.WithPipelineExecutor(pipelineExecutor))
@@ -123,7 +142,7 @@ func NewApplication(ctx context.Context, configPath string, version string) (*Ap
 		AuthController:     controller.NewAuthController(authService, cfg.App.SessionCookieName, time.Duration(cfg.App.SessionTTLHours)*time.Hour, cfg.App.CookieSecure, cfg.App.CookieSameSite),
 		SessionController:  controller.NewSessionController(sessionService, publishService),
 		TaskController:     controller.NewTaskController(taskService),
-		AdminController:    controller.NewAdminController(adminService),
+		AdminController:    adminController,
 		PipelineController: controller.NewPipelineController(pipelineService),
 		OpenAPIController:  controller.NewOpenAPIController(repository),
 		AuthService:        authService,

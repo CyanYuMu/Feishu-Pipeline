@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 
+	"feishu-pipeline/apps/api-go/internal/external/feishu"
 	"feishu-pipeline/apps/api-go/internal/model"
 	"feishu-pipeline/apps/api-go/internal/service"
 	admintype "feishu-pipeline/apps/api-go/internal/type/admin"
@@ -12,10 +14,15 @@ import (
 
 type AdminController struct {
 	adminService *service.AdminService
+	feishuClient *feishu.Client
 }
 
 func NewAdminController(adminService *service.AdminService) *AdminController {
 	return &AdminController{adminService: adminService}
+}
+
+func (c *AdminController) SetFeishuClient(client *feishu.Client) {
+	c.feishuClient = client
 }
 
 // CreateRoleMapping
@@ -112,4 +119,58 @@ func (c *AdminController) SyncKnowledge(ctx *gin.Context) {
 		return
 	}
 	writeSuccess(ctx, http.StatusCreated, admintype.SyncKnowledgeResponse{Count: len(items)})
+}
+
+// TestApprovalCard 测试发送需求确认卡片
+// @tags 后台管理
+// @summary 测试发送需求确认卡片
+// @router /api/admin/test-approval-card [POST]
+// @accept application/json
+// @produce application/json
+// @param req body TestApprovalCardRequest true "测试卡片请求"
+func (c *AdminController) TestApprovalCard(ctx *gin.Context) {
+	var req TestApprovalCardRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	if c.feishuClient == nil {
+		writeError(ctx, http.StatusServiceUnavailable, errors.New("feishu client not available"))
+		return
+	}
+
+	if req.OpenID == "" {
+		writeError(ctx, http.StatusBadRequest, errors.New("open_id is required"))
+		return
+	}
+
+	// 构建测试卡片内容
+	payload := feishu.ApprovalCardPayload{
+		Title:       req.Title,
+		Summary:     req.Summary,
+		Requirement: req.Requirement,
+		SessionID:   req.SessionID,
+		RunID:       req.RunID,
+	}
+
+	result, err := c.feishuClient.SendApprovalCardMessage(ctx.Request.Context(), req.OpenID, payload)
+	if err != nil {
+		writeError(ctx, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusOK, gin.H{
+		"message_id": result.RemoteID,
+		"status":     result.Status,
+	})
+}
+
+type TestApprovalCardRequest struct {
+	OpenID      string `json:"open_id" binding:"required"`
+	Title       string `json:"title"`
+	Summary     string `json:"summary"`
+	Requirement string `json:"requirement"`
+	SessionID   string `json:"session_id"`
+	RunID       string `json:"run_id"`
 }

@@ -14,6 +14,14 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Feishu   FeishuConfig   `mapstructure:"feishu"`
 	AI       AIConfig       `mapstructure:"ai"`
+	GitHub   GitHubConfig   `mapstructure:"github"`
+}
+
+type GitHubConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	ClientID      string `mapstructure:"client_id"`
+	ClientSecret  string `mapstructure:"client_secret"`
+	RedirectURI   string `mapstructure:"redirect_uri"`
 }
 
 type AppConfig struct {

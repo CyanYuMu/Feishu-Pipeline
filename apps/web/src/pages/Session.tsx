@@ -254,7 +254,7 @@ export default function Session() {
         return
       }
       const targetRun = sessionRuns.find(item => item.status === 'waiting_approval') || sessionRuns[0]
-      window.location.assign(`/approvals/${encodeURIComponent(targetRun.id)}`)
+      window.location.assign(`/monitoring?runId=${encodeURIComponent(targetRun.id)}&action=approve`)
     } catch (err) {
       message.error(err instanceof Error ? err.message : '获取审批上下文失败')
     } finally {

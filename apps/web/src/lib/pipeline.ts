@@ -228,6 +228,29 @@ export async function rejectCheckpoint(checkpointId: string, comment: string): P
   })
 }
 
+export interface ChangeSetItem {
+  filePath: string
+  changeType?: string
+  reason?: string
+  proposedPatch?: string
+  contextIncluded?: boolean
+  originalContent?: string
+  proposedDiff?: string
+}
+
+export interface ExecuteChangesResult {
+  appliedFiles: string[]
+  failedFiles: { filePath: string; error: string }[]
+  summary: string
+}
+
+export async function executeChanges(runId: string, changeSet: ChangeSetItem[], token?: string): Promise<ExecuteChangesResult> {
+  return request<ExecuteChangesResult>(`/api/pipeline-runs/${runId}/execute-changes`, {
+    method: 'POST',
+    body: JSON.stringify({ changeSet, token }),
+  })
+}
+
 export function parseJSON<T>(value?: string): T | null {
   if (!value) return null
   try {

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 
 // TS 后端 API 地址
 const API_BASE = 'http://localhost:3001'
+// Go 后端 API 地址
+const GO_API_BASE = 'http://localhost:8080'
 const USER_TOKEN_KEY = 'feishu_user_token'
 const USER_TOKEN_EXPIRES_KEY = 'feishu_user_token_expires'
 const USER_OPEN_ID_KEY = 'feishu_user_open_id'
@@ -32,6 +34,13 @@ export default function Debug() {
   const [receiveIdType, setReceiveIdType] = useState<'open_id' | 'user_id' | 'union_id' | 'email' | 'chat_id'>('open_id')
   const [msgType, setMsgType] = useState<'text' | 'post' | 'interactive'>('text')
   const [messageContent, setMessageContent] = useState('')
+
+  // 卡片测试状态
+  const [cardOpenId, setCardOpenId] = useState(() => localStorage.getItem(USER_OPEN_ID_KEY) || '')
+  const [cardTitle, setCardTitle] = useState('测试需求卡片')
+  const [cardSummary, setCardSummary] = useState('这是一个测试需求摘要，用于验证卡片功能是否正常。')
+  const [cardRequirement, setCardRequirement] = useState('详细需求描述：\n1. 功能点A\n2. 功能点B\n3. 功能点C')
+  const [cardSessionId, setCardSessionId] = useState('test_session_' + Date.now())
 
   // AI 生成状态
   const [aiDocUrl, setAiDocUrl] = useState('')
@@ -147,6 +156,7 @@ export default function Debug() {
       if (openIdParam) {
         setOpenId(openIdParam)
         localStorage.setItem(USER_OPEN_ID_KEY, openIdParam)
+        setCardOpenId(openIdParam)
       }
       // 清除 URL 参数
       window.history.replaceState({}, '', '/debug')
@@ -207,6 +217,7 @@ export default function Debug() {
         }
         if (data.data.open_id) {
           localStorage.setItem(USER_OPEN_ID_KEY, data.data.open_id)
+          setCardOpenId(data.data.open_id)
         }
         setManualCode('')
       }
@@ -417,6 +428,54 @@ export default function Debug() {
     setLoading(false)
   }
 
+  // 测试发送需求确认卡片
+  const sendApprovalCard = async () => {
+    if (!cardOpenId) {
+      alert('请输入接收者的 open_id')
+      return
+    }
+    if (!cardTitle) {
+      alert('请输入卡片标题')
+      return
+    }
+
+    setLoading(true)
+    const start = Date.now()
+
+    try {
+      // 获取 Cookie
+      const cookies = document.cookie.split(';').reduce((acc, cookie) => {
+        const [key, value] = cookie.trim().split('=')
+        acc[key] = value
+        return acc
+      }, {} as Record<string, string>)
+
+      const res = await fetch(`${GO_API_BASE}/api/admin/test-approval-card`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': `session=${cookies['session'] || ''}`,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          open_id: cardOpenId,
+          title: cardTitle,
+          summary: cardSummary,
+          requirement: cardRequirement,
+          session_id: cardSessionId,
+          run_id: '',
+        }),
+      })
+
+      const data = await res.json()
+      addResult('/api/admin/test-approval-card', data, `${Date.now() - start}ms`)
+    } catch (err) {
+      addResult('/api/admin/test-approval-card', { error: String(err) }, `${Date.now() - start}ms`)
+    }
+
+    setLoading(false)
+  }
+
   return (
     <div className="bg-gray-50 p-6" style={{ minHeight: '100vh', overflowY: 'auto' }}>
       <div className="max-w-6xl mx-auto">
@@ -562,6 +621,78 @@ export default function Debug() {
             {loading ? '发送中...' : '📤 发送消息'}
           </button>
           <p className="text-xs text-gray-500 mt-2">提示：接收者需要在机器人的可用范围内，向群组发送时机器人需在群内</p>
+        </div>
+
+        {/* 需求确认卡片测试 */}
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <h2 className="font-semibold text-gray-700 mb-3">📋 需求确认卡片测试</h2>
+          <p className="text-sm text-gray-600 mb-3">测试发送需求确认卡片给用户，卡片包含 Approve/Reject 按钮</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">接收者 Open ID</label>
+              <input
+                type="text"
+                value={cardOpenId}
+                onChange={e => setCardOpenId(e.target.value)}
+                placeholder="例如：ou_c2c620cfd86e5c67267919847143b696"
+                className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">从上方 Token 状态中的 Open ID 复制</p>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">卡片标题</label>
+              <input
+                type="text"
+                value={cardTitle}
+                onChange={e => setCardTitle(e.target.value)}
+                placeholder="需求标题"
+                className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-gray-600 mb-1">需求摘要</label>
+            <input
+              type="text"
+              value={cardSummary}
+              onChange={e => setCardSummary(e.target.value)}
+              placeholder="简短的需求摘要"
+              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-gray-600 mb-1">详细需求</label>
+            <textarea
+              value={cardRequirement}
+              onChange={e => setCardRequirement(e.target.value)}
+              placeholder="详细的需求描述..."
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm text-gray-600 mb-1">Session ID（用于跳转链接）</label>
+            <input
+              type="text"
+              value={cardSessionId}
+              onChange={e => setCardSessionId(e.target.value)}
+              placeholder="会话ID"
+              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <button
+            onClick={sendApprovalCard}
+            disabled={loading || !cardOpenId || !cardTitle}
+            className="px-6 py-3 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-50 font-medium"
+          >
+            {loading ? '发送中...' : '📋 发送需求确认卡片'}
+          </button>
+          <p className="text-xs text-gray-500 mt-2">注意：需要先登录 Go 后端并获取 Admin 权限</p>
         </div>
 
         {/* Token 状态 */}

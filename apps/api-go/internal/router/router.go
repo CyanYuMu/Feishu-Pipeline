@@ -38,6 +38,10 @@ func New(deps Dependencies) *gin.Engine {
 	authenticated.POST("/auth/github/bind", deps.AuthController.GitHubBind)
 	authenticated.POST("/auth/github/unbind", deps.AuthController.GitHubUnbind)
 	authenticated.GET("/github/repos", deps.AuthController.GitHubRepos)
+	authenticated.GET("/github/repos/:owner/:repo/branches", deps.AuthController.GitHubBranches)
+	authenticated.POST("/github/repos", deps.AuthController.CreateGitHubRepo)
+	authenticated.GET("/feishu/documents", deps.AuthController.FeishuDocuments)
+	authenticated.GET("/feishu/documents/:documentId/content", deps.AuthController.FeishuDocumentContent)
 	authenticated.GET("/sessions", deps.SessionController.ListSessions)
 	authenticated.POST("/sessions", deps.SessionController.CreateSession)
 	authenticated.GET("/sessions/:sessionID", deps.SessionController.GetSession)
@@ -54,6 +58,7 @@ func New(deps Dependencies) *gin.Engine {
 	adminGroup.GET("/role-owners", deps.AdminController.ListRoleOwners)
 	adminGroup.POST("/role-owners", deps.AdminController.SaveRoleOwner)
 	adminGroup.POST("/knowledge/sync", deps.AdminController.SyncKnowledge)
+	adminGroup.POST("/test-approval-card", deps.AdminController.TestApprovalCard)
 
 	authenticated.GET("/pipeline-templates", deps.PipelineController.ListTemplates)
 	authenticated.GET("/pipeline-runs", deps.PipelineController.ListRuns)
@@ -71,9 +76,13 @@ func New(deps Dependencies) *gin.Engine {
 	authenticated.POST("/pipeline-runs/:id/pause", deps.PipelineController.PauseRun)
 	authenticated.POST("/pipeline-runs/:id/resume", deps.PipelineController.ResumeRun)
 	authenticated.POST("/pipeline-runs/:id/terminate", deps.PipelineController.TerminateRun)
+	authenticated.POST("/pipeline-runs/:id/execute-changes", deps.PipelineController.ExecuteChanges)
 	authenticated.GET("/git-deliveries/:deliveryID", deps.PipelineController.GetGitDelivery)
 	authenticated.POST("/checkpoints/:checkpointID/approve", deps.PipelineController.ApproveCheckpoint)
 	authenticated.POST("/checkpoints/:checkpointID/reject", deps.PipelineController.RejectCheckpoint)
+
+	// 飞书卡片回调接口（公网回调，需要签名验证）
+	engine.POST("/public/feishu/card/callback", deps.AuthController.HandleFeishuCardCallback)
 
 	// OpenAPI Spec 接口（需要认证）
 	authenticated.POST("/openapi/specs", deps.OpenAPIController.SaveSpec)

@@ -264,6 +264,8 @@ app.get("/api/feishu/document-content", async (request: FastifyRequest, reply: F
   }
 })
 
+// 飞书文档列表（代理到 Go 后端）
+
 app.get("/api/feishu/wiki-spaces", async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     const { user_token, folder_token } = request.query as any

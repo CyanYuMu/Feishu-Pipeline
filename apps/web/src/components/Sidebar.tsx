@@ -7,7 +7,6 @@ const mainNavItems = [
   { icon: 'add_circle', label: 'Creation', to: '/new-requirement' },
   { icon: 'schema', label: 'Workflows', to: '/workflows' },
   { icon: 'monitoring', label: 'Monitoring', to: '/monitoring' },
-  { icon: 'fact_check', label: 'Approvals', to: '/approvals' },
   { icon: 'local_shipping', label: 'Delivery', to: '/delivery' },
   { icon: 'inventory', label: 'Assets', to: '/assets' },
 ]

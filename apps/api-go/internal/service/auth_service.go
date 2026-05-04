@@ -23,11 +23,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// 创建带代理支持的 HTTP Client
 func newGitHubHTTPClient() *http.Client {
 	transport := &http.Transport{}
-
-	// 优先使用 GitHub 专用代理
 	proxyStr := os.Getenv("GITHUB_HTTPS_PROXY")
 	if proxyStr == "" {
 		proxyStr = os.Getenv("GITHUB_HTTP_PROXY")
@@ -297,6 +294,152 @@ type GitHubRepo struct {
 	Description string `json:"description"`
 }
 
+type GitHubBranch struct {
+	Name      string `json:"name"`
+	Protected bool   `json:"protected"`
+}
+
+type CreateGitHubRepoInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Private     bool   `json:"private"`
+}
+
+type CreateGitHubRepoResponse struct {
+	FullName string `json:"full_name"`
+	HTMLURL  string `json:"html_url"`
+}
+
+type FeishuDocument struct {
+	Token      string `json:"token"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	CreateTime string `json:"create_time"`
+	UpdateTime string `json:"update_time"`
+}
+
+// GetFeishuDocuments 获取飞书文档列表
+func (s *AuthService) GetFeishuDocuments(ctx context.Context, userID string, folderToken string) ([]FeishuDocument, error) {
+	// 从 FeishuCredential 表获取 access token
+	creds, err := s.repository.FindCredentialByUserID(ctx, userID)
+	if err != nil {
+		return nil, errors.New("feishu not bound")
+	}
+
+	if creds.AccessToken == "" {
+		return nil, errors.New("feishu not bound")
+	}
+
+	apiURL := "https://open.feishu.cn/open-apis/drive/v1/files"
+	params := url.Values{}
+	params.Set("page_size", "50")
+	if folderToken != "" {
+		params.Set("folder_token", folderToken)
+	}
+
+	req, err := http.NewRequest("GET", apiURL+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("feishu api error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Files []struct {
+				Token      string `json:"token"`
+				Name       string `json:"name"`
+				Type       string `json:"type"`
+				URL        string `json:"url"`
+				CreateTime string `json:"create_time"`
+				UpdateTime string `json:"update_time"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse feishu response: %v", err)
+	}
+
+	docs := make([]FeishuDocument, 0, len(result.Data.Files))
+	for _, f := range result.Data.Files {
+		url := strings.Replace(f.URL, "lanshanteam.feishu.cn", "feishu.cn", 1)
+		docs = append(docs, FeishuDocument{
+			Token:      f.Token,
+			Name:       f.Name,
+			Type:       f.Type,
+			URL:        url,
+			CreateTime: f.CreateTime,
+			UpdateTime: f.UpdateTime,
+		})
+	}
+
+	return docs, nil
+}
+
+// GetFeishuDocumentContent 获取飞书文档内容
+func (s *AuthService) GetFeishuDocumentContent(ctx context.Context, userID string, documentID string) (string, error) {
+	// 从 FeishuCredential 表获取 access token
+	creds, err := s.repository.FindCredentialByUserID(ctx, userID)
+	if err != nil {
+		return "", errors.New("feishu not bound")
+	}
+
+	if creds.AccessToken == "" {
+		return "", errors.New("feishu not bound")
+	}
+
+	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/docx/v1/documents/%s/raw_content", documentID)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("feishu api error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("failed to parse feishu response: %v", err)
+	}
+
+	return result.Data.Content, nil
+}
+
 // ListGitHubRepos 获取当前用户的 GitHub 仓库列表
 func (s *AuthService) ListGitHubRepos(ctx context.Context, userID string) ([]GitHubRepo, error) {
 	user, err := s.repository.FindUserByID(ctx, userID)
@@ -346,6 +489,205 @@ func (s *AuthService) ListGitHubRepos(ctx context.Context, userID string) ([]Git
 
 	log.Printf("[GitHub Repos] Found %d repos", len(repos))
 	return repos, nil
+}
+
+// ListGitHubBranches 获取指定仓库的分支列表
+func (s *AuthService) ListGitHubBranches(ctx context.Context, userID string, owner string, repo string) ([]GitHubBranch, error) {
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		log.Printf("[GitHub Branches] User not found: %s", userID)
+		return nil, errors.New("user not found")
+	}
+
+	if user.GitHubAccessToken == "" {
+		log.Printf("[GitHub Branches] GitHub not bound for user: %s", userID)
+		return nil, errors.New("github not bound")
+	}
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/branches", owner, repo)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+user.GitHubAccessToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	client := newGitHubHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[GitHub Branches] Request failed: %v", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	log.Printf("[GitHub Branches] Response status: %d", resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[GitHub Branches] Error response: %s", string(body))
+		return nil, fmt.Errorf("github api error: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	var branches []GitHubBranch
+	if err := json.Unmarshal(body, &branches); err != nil {
+		log.Printf("[GitHub Branches] Parse error: %v, body: %s", err, string(body))
+		return nil, fmt.Errorf("failed to parse github branches response: %v", err)
+	}
+
+	log.Printf("[GitHub Branches] Found %d branches for %s/%s", len(branches), owner, repo)
+	return branches, nil
+}
+
+// CreateGitHubRepo 创建新的 GitHub 仓库
+func (s *AuthService) CreateGitHubRepo(ctx context.Context, userID string, input CreateGitHubRepoInput) (*CreateGitHubRepoResponse, error) {
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		log.Printf("[GitHub Create Repo] User not found: %s", userID)
+		return nil, errors.New("user not found")
+	}
+
+	if user.GitHubAccessToken == "" {
+		log.Printf("[GitHub Create Repo] GitHub not bound for user: %s", userID)
+		return nil, errors.New("github not bound")
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"name":        input.Name,
+		"description": input.Description,
+		"private":     input.Private,
+		"auto_init":   true, // 自动创建初始 commit 和 main 分支
+	})
+
+	req, err := http.NewRequest("POST", "https://api.github.com/user/repos", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+user.GitHubAccessToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("Content-Type", "application/json")
+
+	client := newGitHubHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[GitHub Create Repo] Request failed: %v", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusCreated {
+		log.Printf("[GitHub Create Repo] Error response: %s", string(respBody))
+		return nil, fmt.Errorf("github api error: status=%d, body=%s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		FullName string `json:"full_name"`
+		HTMLURL  string `json:"html_url"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		log.Printf("[GitHub Create Repo] Parse error: %v", err)
+		return nil, err
+	}
+
+	log.Printf("[GitHub Create Repo] Created repo: %s", result.FullName)
+
+	// 解析 owner 和 repo 名
+	owner := ""
+	repoName := result.FullName
+	if idx := strings.LastIndex(result.FullName, "/"); idx != -1 {
+		owner = result.FullName[:idx]
+		repoName = result.FullName[idx+1:]
+	}
+
+	// 自动创建默认 main 分支
+	if err := s.createDefaultBranch(ctx, user.GitHubAccessToken, owner, repoName); err != nil {
+		log.Printf("[GitHub Create Repo] Failed to create default branch: %v", err)
+		// 不影响主流程，只是没有默认分支
+	}
+
+	return &CreateGitHubRepoResponse{
+		FullName: result.FullName,
+		HTMLURL:  result.HTMLURL,
+	}, nil
+}
+
+// createDefaultBranch 确保 main 分支存在
+func (s *AuthService) createDefaultBranch(ctx context.Context, token string, owner string, repoName string) error {
+	// 获取仓库信息
+	req, _ := http.NewRequest("GET", fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repoName), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	client := newGitHubHTTPClient()
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var repoInfo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &repoInfo); err != nil {
+		return err
+	}
+
+	// 默认分支已是 main，无需处理
+	if repoInfo.DefaultBranch == "main" {
+		return nil
+	}
+
+	// 获取默认分支的 SHA
+	refReq, _ := http.NewRequest("GET", fmt.Sprintf("https://api.github.com/repos/%s/%s/git/refs/heads/%s", owner, repoName, repoInfo.DefaultBranch), nil)
+	refReq.Header.Set("Authorization", "Bearer "+token)
+	refReq.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp2, err := client.Do(refReq)
+	if err != nil {
+		return err
+	}
+	defer resp2.Body.Close()
+
+	var refInfo struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	refBody2, _ := io.ReadAll(resp2.Body)
+	if resp2.StatusCode != 200 {
+		return fmt.Errorf("failed to get ref, status: %d", resp2.StatusCode)
+	}
+	if err := json.Unmarshal(refBody2, &refInfo); err != nil {
+		return err
+	}
+
+	// 创建 main 分支
+	refBody, _ := json.Marshal(map[string]interface{}{
+		"ref": "refs/heads/main",
+		"sha": refInfo.Object.SHA,
+	})
+
+	createReq, _ := http.NewRequest("POST", fmt.Sprintf("https://api.github.com/repos/%s/%s/git/refs", owner, repoName), strings.NewReader(string(refBody)))
+	createReq.Header.Set("Authorization", "Bearer "+token)
+	createReq.Header.Set("Accept", "application/vnd.github.v3+json")
+	createReq.Header.Set("Content-Type", "application/json")
+
+	createResp, err := client.Do(createReq)
+	if err != nil {
+		return err
+	}
+	defer createResp.Body.Close()
+
+	if createResp.StatusCode != 201 {
+		return fmt.Errorf("failed to create main branch: status %d", createResp.StatusCode)
+	}
+
+	return nil
 }
 
 func (s *AuthService) exchangeGitHubCode(code string) (*githubTokenResponse, error) {
@@ -746,4 +1088,74 @@ func isLikelyDepartmentCode(value string) bool {
 		return hasDigit && hasLetter
 	}
 	return false
+}
+
+// FeishuCardCallbackRequest 飞书卡片回调请求
+type FeishuCardCallbackRequest struct {
+	Schema    string `json:"schema"`
+	Token     string `json:"token"`
+	Challenge string `json:"challenge,omitempty"` // URL 验证请求
+	Type      string `json:"type"`
+	Event     struct {
+		Action string `json:"action"`
+		Input  struct {
+			Intent string `json:"intent"` // approve / reject
+		} `json:"input"`
+		Message struct {
+			MessageID string `json:"message_id"`
+			RootID    string `json:"root_id"`
+			ParentID  string `json:"parent_id"`
+			CreateTime string `json:"create_time"`
+			ChatID    string `json:"chat_id"`
+			Sender    struct {
+				SenderID struct {
+					OpenID   string `json:"open_id"`
+					UserID   string `json:"user_id"`
+					UnionID  string `json:"union_id"`
+				} `json:"sender_id"`
+			} `json:"sender"`
+		} `json:"message"`
+	} `json:"event"`
+}
+
+// HandleFeishuCardCallback 处理飞书交互卡片按钮回调
+func (s *AuthService) HandleFeishuCardCallback(ctx context.Context, req FeishuCardCallbackRequest) (map[string]any, error) {
+	log.Printf("[Feishu Card Callback] type=%s action=%s intent=%s sender=%s",
+		req.Type, req.Event.Action, req.Event.Input.Intent, req.Event.Message.Sender.SenderID.OpenID)
+
+	// URL 验证请求（飞书卡片配置时的验证）
+	if req.Challenge != "" {
+		return map[string]any{"challenge": req.Challenge}, nil
+	}
+
+	// 只有卡片回调类型
+	if req.Type != "card" {
+		return map[string]any{"success": true, "message": "ignored non-card event"}, nil
+	}
+
+	// 检查 intent
+	intent := req.Event.Input.Intent
+	senderOpenID := req.Event.Message.Sender.SenderID.OpenID
+
+	if intent == "approve" {
+		log.Printf("[Feishu Card Callback] Approve action from open_id=%s", senderOpenID)
+		// TODO: 可以在这里触发后续的 Pipeline 启动逻辑
+		// 目前需求发布时已自动触发，这里可以做一些额外的确认处理
+		return map[string]any{
+			"success": true,
+			"action":  "approve",
+			"message": "需求已确认，系统将自动启动交付流程",
+		}, nil
+	} else if intent == "reject" {
+		log.Printf("[Feishu Card Callback] Reject action from open_id=%s", senderOpenID)
+		// TODO: 可以在这里通知用户去补充信息
+		// 或者发送消息给用户，引导其回到页面继续编辑
+		return map[string]any{
+			"success": true,
+			"action":  "reject",
+			"message": "请返回页面补充需求信息后再提交",
+		}, nil
+	}
+
+	return map[string]any{"success": true, "message": "unknown intent"}, nil
 }
