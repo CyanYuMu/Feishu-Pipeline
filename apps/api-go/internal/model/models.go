@@ -113,7 +113,7 @@ var ArtifactTypeDescriptions = map[ArtifactType]string{
 	ArtifactCodeDiff:              "代码变更计划",
 	ArtifactTestReport:            "测试报告",
 	ArtifactReviewReport:          "评审报告",
-	ArtifactDeliverySummary:      "交付摘要",
+	ArtifactDeliverySummary:       "交付摘要",
 }
 
 type CheckpointType string
@@ -240,7 +240,6 @@ type ExecutionResult struct {
 	ExecutedAt   time.Time        `json:"executedAt"`
 }
 
-
 // ExecutionError 执行失败的文件错误
 type ExecutionError struct {
 	FilePath string `json:"filePath"`
@@ -274,6 +273,8 @@ type AgentRun struct {
 	LatencyMS      int64          `gorm:"not null;default:0"`
 	Status         AgentRunStatus `gorm:"size:32;not null;index"`
 	ErrorMessage   string         `gorm:"type:text"`
+	// 多Agent扩展字段
+	ParentAgentRunID string `gorm:"size:64;index"` // 父AgentRun ID，用于关联多Agent执行结果
 	BaseModel
 }
 
@@ -444,20 +445,20 @@ type Project struct {
 	ID          string `gorm:"primaryKey;size:128"`
 	Title       string `gorm:"size:255;not null"`
 	Description string `gorm:"size:1024"`
-	SwaggerURL  string `gorm:"size:512"` // 汇总后的 Swagger UI URL
+	SwaggerURL  string `gorm:"size:512"`  // 汇总后的 Swagger UI URL
 	DocUrls     string `gorm:"type:text"` // JSON array of document URLs
-	GitHubRepo  string `gorm:"size:512"` // 关联的 GitHub 仓库，多个用逗号分隔，格式：owner/repo1,owner/repo2
+	GitHubRepo  string `gorm:"size:512"`  // 关联的 GitHub 仓库，多个用逗号分隔，格式：owner/repo1,owner/repo2
 	BaseModel
 }
 
 // OpenAPISpec API 文档 - 属于某个项目
 type OpenAPISpec struct {
-	ID         string `gorm:"primaryKey;size:128"`
-	ProjectID  string `gorm:"size:128;index"` // 所属项目
-	Title      string `gorm:"size:255"`
+	ID          string `gorm:"primaryKey;size:128"`
+	ProjectID   string `gorm:"size:128;index"` // 所属项目
+	Title       string `gorm:"size:255"`
 	Description string `gorm:"size:1024"`
-	SpecJSON   string `gorm:"type:text;not null"`
-	SwaggerURL string `gorm:"size:512"`
-	DocUrls    string `gorm:"type:text"` // JSON array of document URLs
+	SpecJSON    string `gorm:"type:text;not null"`
+	SwaggerURL  string `gorm:"size:512"`
+	DocUrls     string `gorm:"type:text"` // JSON array of document URLs
 	BaseModel
 }

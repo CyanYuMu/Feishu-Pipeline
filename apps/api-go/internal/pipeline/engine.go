@@ -300,6 +300,8 @@ func buildAgentRun(run model.PipelineRun, stage model.StageRun, inputJSON string
 	promptSnapshot := ""
 	tokenUsageJSON := "{}"
 	latencyMS := int64(0)
+	parentAgentRunID := ""
+
 	if execErr != nil {
 		status = model.AgentRunFailed
 		errorMessage = execErr.Error()
@@ -327,22 +329,26 @@ func buildAgentRun(run model.PipelineRun, stage model.StageRun, inputJSON string
 		if observation.ErrorMessage != "" {
 			errorMessage = observation.ErrorMessage
 		}
+		if observation.ParentAgentRunID != "" {
+			parentAgentRunID = observation.ParentAgentRunID
+		}
 	}
 	return &model.AgentRun{
-		ID:             utils.NewID("agentrun"),
-		PipelineRunID:  run.ID,
-		StageRunID:     stage.ID,
-		AgentKey:       agentKey,
-		Provider:       provider,
-		Model:          modelName,
-		PromptSnapshot: promptSnapshot,
-		InputJSON:      inputJSON,
-		OutputJSON:     outputJSON,
-		TokenUsageJSON: tokenUsageJSON,
-		LatencyMS:      latencyMS,
-		Status:         status,
-		ErrorMessage:   errorMessage,
-		BaseModel:      model.BaseModel{CreatedAt: now, UpdatedAt: now},
+		ID:               utils.NewID("agentrun"),
+		PipelineRunID:    run.ID,
+		StageRunID:       stage.ID,
+		AgentKey:         agentKey,
+		Provider:         provider,
+		Model:            modelName,
+		PromptSnapshot:   promptSnapshot,
+		InputJSON:        inputJSON,
+		OutputJSON:       outputJSON,
+		TokenUsageJSON:   tokenUsageJSON,
+		LatencyMS:        latencyMS,
+		Status:           status,
+		ErrorMessage:     errorMessage,
+		ParentAgentRunID: parentAgentRunID,
+		BaseModel:        model.BaseModel{CreatedAt: now, UpdatedAt: now},
 	}
 }
 

@@ -172,11 +172,28 @@
 - timeline/current 聚合 API：测试通过
 - 真实 AI Agent 执行：已用 Ark / `doubao-seed-2-0-lite-260215` 完成真实配置联调
 - 多 Provider 切换：已支持统一 provider 抽象，已实现 Ark + OpenAI 兼容双 Provider，运行时可配置切换
-- GitDelivery 交付闭环：基础记录与查询 API 已完成；远程 push/PR 仍未启用
+- GitDelivery 交付闭环：基础记录与查询 API 已完成；远程 push/PR 已通过 `execute-changes` 接口实现，需手动触发
 - timeline/current nextAction：已完成
 - 前端工作台消费 timeline/current：`Workflows`、`Approvals`、`Delivery` 已接入真实 Pipeline API
 - 前端工作流、审批、交付页面：已从静态 Demo 数据升级为真实后端闭环展示，并通过前端构建
-- 页面圈选与热更新：未完成，且不属于本阶段主线
+- 页面圈选与热更新：未完成，属于功能二选做范围
+
+### 3.3 功能一可选加分项完成情况
+
+- 多 Agent 协作：未实现，当前仅支持单 Agent 顺序执行
+- 自动回归：未实现，Reject 后需人工触发重跑
+- 可观测性面板：基本完成，已支持阶段耗时、Token 消耗、Agent 推理过程展示，缺少统计聚合面板
+- 代码库索引：未实现，仅支持手动提供文件路径上下文
+- Pipeline 模板：仅支持单一默认模板，不支持多模板和自定义编辑
+- Git 集成：已实现，支持自动创建分支、提交代码、发起 PR/ MR，需手动触发执行
+
+### 3.4 功能二（选做）完成情况
+
+- 前端UI和官网：已完成，TS+React 单页应用，包含完整的工作台页面
+- 注入悬浮对话框与圈选功能：未实现
+- 支持圈选并定位修改：未实现
+- 预览链接支持热更新：未实现
+- 自动创建 MR 并生成摘要：部分完成，摘要生成已实现，MR 创建需手动触发
 
 ### 3.3 本次核验依据
 

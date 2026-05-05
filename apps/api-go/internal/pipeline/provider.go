@@ -59,6 +59,11 @@ type AgentObservation struct {
 	LatencyMS      int64
 	Status         model.AgentRunStatus
 	ErrorMessage   string
+	// 多Agent扩展字段
+	ParentAgentRunID string              `json:"parentAgentRunID,omitempty"` // 父AgentRun ID（子Agent）
+	ChildAgentRuns   []*AgentObservation `json:"childAgentRuns,omitempty"`   // 子Agent执行结果（父Agent）
+	MergeStrategy    MergeStrategy       `json:"mergeStrategy,omitempty"`    // 使用的合并策略
+	MergeMetadata    map[string]any      `json:"mergeMetadata,omitempty"`    // 合并过程元数据
 }
 
 type TextGenerator interface {
