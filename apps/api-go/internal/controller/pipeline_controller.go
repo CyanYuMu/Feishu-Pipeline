@@ -257,7 +257,7 @@ func (c *PipelineController) GetCodeDiff(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{
+	writeSuccess(ctx, http.StatusOK, gin.H{
 		"changeSet": content["changeSet"],
 		"summary":   codeDiffArtifact.ContentText,
 		"updatedAt": codeDiffArtifact.UpdatedAt,

@@ -265,6 +265,15 @@ func isPublishIntent(content string) bool {
 		"submitrequirement",
 		"publishrequirement",
 		"publishthisrequirement",
+		"需求已梳理完成",
+		"可以开始交付",
+		"触发交付工作流",
+		"启动交付流程",
+		"开始执行需求",
+		"需求确认完成",
+		"梳理完成开始交付",
+		"进入流水线",
+		"开始流水线",
 	}
 	for _, keyword := range keywords {
 		if strings.Contains(normalized, keyword) {

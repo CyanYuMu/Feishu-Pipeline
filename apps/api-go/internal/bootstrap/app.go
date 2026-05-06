@@ -144,7 +144,7 @@ func NewApplication(ctx context.Context, configPath string, version string) (*Ap
 		TaskController:     controller.NewTaskController(taskService),
 		AdminController:    adminController,
 		PipelineController: controller.NewPipelineController(pipelineService),
-		OpenAPIController:  controller.NewOpenAPIController(repository),
+		OpenAPIController:  controller.NewOpenAPIController(repository, pipelineService),
 		AuthService:        authService,
 	})
 

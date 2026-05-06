@@ -216,6 +216,47 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 	// 发送需求确认卡片给发布者
 	s.sendApprovalCard(ctx, aggregate, output.Requirement)
 
+	// 自动创建对应的研发流水线
+	if s.pipelineService != nil {
+		// 获取默认模板
+		templates, err := s.pipelineService.ListPipelineTemplates(ctx)
+		if err == nil && len(templates) > 0 {
+			// 使用第一个激活的模板
+			var defaultTemplate *model.PipelineTemplate
+			for _, t := range templates {
+				if t.IsActive {
+					defaultTemplate = &t
+					break
+				}
+			}
+
+			if defaultTemplate != nil {
+				// 构建需求描述
+				requirementText := aggregate.Session.Title
+				if aggregate.Session.Summary != "" {
+					requirementText += "\n\n" + aggregate.Session.Summary
+				}
+
+				// 创建流水线
+				_, err = s.pipelineService.CreatePipelineRun(ctx, CreatePipelineRunInput{
+					TemplateID:      defaultTemplate.ID,
+					Title:           aggregate.Session.Title,
+					RequirementText: requirementText,
+					TargetRepo:      "self", // 会话发布默认当前仓库
+					TargetBranch:    "main",
+					CreatedBy:       aggregate.Session.OwnerID, // 使用会话创建者
+					SourceSessionID: aggregate.Session.ID,
+				})
+
+				if err != nil {
+					log.Printf("自动创建流水线失败: session_id=%s err=%v", payload.SessionID, err)
+				} else {
+					log.Printf("自动创建流水线成功: session_id=%s", payload.SessionID)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

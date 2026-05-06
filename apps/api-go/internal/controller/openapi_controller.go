@@ -3,23 +3,26 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
 
 	"feishu-pipeline/apps/api-go/internal/model"
 	"feishu-pipeline/apps/api-go/internal/repo"
+	"feishu-pipeline/apps/api-go/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type OpenAPIController struct {
-	repo *repo.Repository
+	repo            *repo.Repository
+	pipelineService *service.PipelineService
 }
 
-func NewOpenAPIController(repo *repo.Repository) *OpenAPIController {
-	return &OpenAPIController{repo: repo}
+func NewOpenAPIController(repo *repo.Repository, pipelineService *service.PipelineService) *OpenAPIController {
+	return &OpenAPIController{repo: repo, pipelineService: pipelineService}
 }
 
 // SaveSpec
@@ -37,7 +40,7 @@ func (c *OpenAPIController) SaveSpec(ctx *gin.Context) {
 	}
 
 	specID := "spec_" + uuid.New().String()[:8]
-	
+
 	// 获取前端 URL
 	frontendURL := os.Getenv("FRONTEND_URL")
 	if frontendURL == "" {
@@ -46,12 +49,12 @@ func (c *OpenAPIController) SaveSpec(ctx *gin.Context) {
 	swaggerURL := frontendURL + "/swagger?specId=" + specID
 
 	spec := &model.OpenAPISpec{
-		ID:         specID,
-		ProjectID:  req.ProjectID,
-		Title:      req.Title,
+		ID:          specID,
+		ProjectID:   req.ProjectID,
+		Title:       req.Title,
 		Description: req.Description,
-		SpecJSON:   req.SpecJSON,
-		SwaggerURL: swaggerURL,
+		SpecJSON:    req.SpecJSON,
+		SwaggerURL:  swaggerURL,
 		BaseModel: model.BaseModel{
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -105,12 +108,12 @@ func (c *OpenAPIController) SaveSpecPublic(ctx *gin.Context) {
 	swaggerURL := frontendURL + "/swagger?specId=" + specID
 
 	spec := &model.OpenAPISpec{
-		ID:         specID,
-		ProjectID:  req.ProjectID,
-		Title:      req.Title,
+		ID:          specID,
+		ProjectID:   req.ProjectID,
+		Title:       req.Title,
 		Description: req.Description,
-		SpecJSON:   req.SpecJSON,
-		SwaggerURL: swaggerURL,
+		SpecJSON:    req.SpecJSON,
+		SwaggerURL:  swaggerURL,
 		BaseModel: model.BaseModel{
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -157,20 +160,20 @@ func (c *OpenAPIController) ListSpecsPublic(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data": specs,
+		"data":    specs,
 	})
 }
 
 // UpdateSpecPublic 更新规范的关联信息（不需要认证，供前端调用）
 func (c *OpenAPIController) UpdateSpecPublic(ctx *gin.Context) {
 	specID := ctx.Param("specId")
-	
+
 	var req UpdateSpecRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "invalid request body"})
 		return
 	}
-	
+
 	// 构建更新数据
 	updates := map[string]interface{}{}
 	if req.Title != "" {
@@ -184,17 +187,17 @@ func (c *OpenAPIController) UpdateSpecPublic(ctx *gin.Context) {
 		docUrlsJSON, _ := json.Marshal(req.DocUrls)
 		updates["doc_urls"] = string(docUrlsJSON)
 	}
-	
+
 	if len(updates) == 0 {
 		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "error": "no fields to update"})
 		return
 	}
-	
+
 	if err := c.repo.UpdateOpenAPISpec(ctx.Request.Context(), specID, updates); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to update spec"})
 		return
 	}
-	
+
 	ctx.JSON(http.StatusOK, gin.H{"success": true, "message": "spec updated"})
 }
 
@@ -216,11 +219,11 @@ func (c *OpenAPIController) CreateProject(ctx *gin.Context) {
 	swaggerURL := frontendURL + "/swagger?projectId=" + projectID
 
 	project := &model.Project{
-		ID:         projectID,
-		Title:      req.Title,
+		ID:          projectID,
+		Title:       req.Title,
 		Description: req.Description,
-		SwaggerURL: swaggerURL,
-		GitHubRepo: req.GitHubRepo,
+		SwaggerURL:  swaggerURL,
+		GitHubRepo:  req.GitHubRepo,
 		BaseModel: model.BaseModel{
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
@@ -230,6 +233,43 @@ func (c *OpenAPIController) CreateProject(ctx *gin.Context) {
 	if err := c.repo.CreateProject(ctx.Request.Context(), project); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "error": "failed to create project"})
 		return
+	}
+
+	// 自动创建对应的研发流水线
+	templates, err := c.pipelineService.ListPipelineTemplates(ctx.Request.Context())
+	if err == nil && len(templates) > 0 {
+		// 使用第一个激活的模板
+		var defaultTemplate *model.PipelineTemplate
+		for _, t := range templates {
+			if t.IsActive {
+				defaultTemplate = &t
+				break
+			}
+		}
+
+		if defaultTemplate != nil {
+			// 构建需求描述
+			requirementText := req.Title
+			if req.Description != "" {
+				requirementText += "\n\n" + req.Description
+			}
+
+			// 创建流水线
+			_, err = c.pipelineService.CreatePipelineRun(ctx.Request.Context(), service.CreatePipelineRunInput{
+				TemplateID:      defaultTemplate.ID,
+				Title:           req.Title,
+				RequirementText: requirementText,
+				TargetRepo:      req.GitHubRepo,
+				TargetBranch:    "main",
+				CreatedBy:       "system", // 公开接口默认使用system用户
+				SelectedDocUrls: req.DocUrls,
+			})
+
+			if err != nil {
+				// 日志记录错误，但不影响项目创建的成功返回
+				fmt.Printf("自动创建流水线失败: %v\n", err)
+			}
+		}
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{
@@ -251,7 +291,7 @@ func (c *OpenAPIController) ListProjects(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data": projects,
+		"data":    projects,
 	})
 }
 
@@ -267,7 +307,7 @@ func (c *OpenAPIController) GetProject(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data": project,
+		"data":    project,
 	})
 }
 
@@ -320,7 +360,7 @@ func (c *OpenAPIController) GetProjectSpecs(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data": specs,
+		"data":    specs,
 	})
 }
 
