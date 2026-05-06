@@ -20,6 +20,8 @@
 10. Pipeline 模板系统已补齐三类预置模板：新功能交付、缺陷修复、重构交付；前端 Workflows 新建入口可选择模板创建 PipelineRun。
 11. Workflows 已补齐代码 Diff 对话入口与执行轨道：只要当前 PipelineRun 存在 `code_diff` 产物、代码生成/评审 AgentRun 或代码阶段上下文，即可在顶部操作区、右侧上下文和悬浮按钮打开对话式 Diff 面板；面板优先展示结构化变更文件、摘要和行级 diff，审批 checkpoint 到达后可直接 Resolve / Reject。嵌入 Workflows 时面板复用父页面 timeline，并对 `code-diff` 做短期前端缓存，避免每次打开都请求较慢的 `/api/pipeline-runs/:id/current`。
 12. GitHub 绑定入口已改为读取后端 OAuth 配置，后端开放 `/api/auth/github/config` 返回启用状态、clientId 与 callbackUrl；前端不再硬编码 clientId，未配置时给出明确提示。
+13. Reject 自动回归链路已对齐赛题演示：审批面板 Reject 会携带用户输入的修改意见，后端将上一可执行阶段重新置为 queued 并把 `rejectReason` 注入 inputJson，Workflows 阶段明细会展示“回退重做”原因。后续仍需补最大重试次数配置化。
+14. GitHub 交付链路已从“创建仓库/分支”推进到“commit/push/PR”：`execute-changes` 会优先使用当前登录用户绑定的 GitHub token，将结构化 `code_diff` 变更写入工作分支。GitHub Contents API 写入文件时会在远程分支生成 commit，后端记录最新 `commitSha`，随后自动创建 PR 并将 `prmrUrl` 写入 GitDelivery。
 
 该能力用于支撑赛题功能一中的第一步演示：用户只需要在前端对话框输入自然语言需求并确认，系统即可输出结构化需求文档、发送到飞书，并自动进入 DevFlow Pipeline。
 

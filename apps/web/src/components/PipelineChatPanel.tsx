@@ -435,9 +435,11 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
     }
     if (!checkpointId || deciding) return
     setDeciding('reject')
+    const rejectReason = input.trim() || '请根据评审意见自动修复后重新提交评审'
     try {
-      await rejectCheckpoint(checkpointId, '')
+      await rejectCheckpoint(checkpointId, rejectReason)
       message.success('已驳回审批，流水线将回退重做')
+      setInput('')
       onTimelineDirty?.()
       setCollapsed(true)
     } catch (err) {
@@ -519,7 +521,7 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
                         Resolve
                       </Button>
                       <Button danger size="small" disabled={!canDecide} loading={deciding === 'reject'} onClick={() => void handleReject()}>
-                        Reject
+                        Reject 重做
                       </Button>
                     </div>
                   ) : null}
@@ -553,7 +555,7 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
                           Resolve
                         </Button>
                         <Button danger size="small" disabled={!canDecide} loading={deciding === 'reject'} onClick={() => void handleReject()}>
-                          Reject
+                          Reject 重做
                         </Button>
                       </div>
                     ) : null}
@@ -573,7 +575,7 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
                           Resolve
                         </Button>
                         <Button danger size="small" disabled={!canDecide} loading={deciding === 'reject'} onClick={() => void handleReject()}>
-                          Reject
+                          Reject 重做
                         </Button>
                       </div>
                     ) : null}
@@ -599,7 +601,7 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
                 value={input}
                 disabled={!sessionId || sending}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder={sessionId ? '输入你的问题或修改要求...' : '当前 run 未绑定 session，无法发消息'}
+                placeholder={sessionId ? '输入你的问题或修改要求；点击 Reject 时会作为回退重做原因...' : '当前 run 未绑定 session，无法发消息'}
               />
               <Button type="primary" icon={<SendOutlined />} disabled={!canSend} loading={sending} onClick={() => void handleSend()} />
             </div>

@@ -107,6 +107,8 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
       const config = data.data
       if (!config?.enabled) { alert('飞书登录未启用'); return }
       const state = Math.random().toString(36).substring(2)
+      sessionStorage.removeItem('feishu_bind_mode')
+      sessionStorage.removeItem('github_bind_mode')
       sessionStorage.setItem('feishu_auth_state', state)
       const redirectUri = `${window.location.origin}/auth/callback`
       const authUrl = `https://open.feishu.cn/open-apis/authen/v1/authorize?` +
@@ -152,25 +154,16 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
         const userData = data.data
         const bindings: typeof userBindings = {}
 
-        // 飞书登录用户（id 以 fs_ 开头）
-        if (userData?.id?.startsWith('fs_')) {
+        if (userData?.feishuOpenID || userData?.id?.startsWith('fs_')) {
           bindings.feishu = {
             openId: userData.feishuOpenID || userData.id.replace('fs_', ''),
             name: userData.name || '飞书用户'
           }
-          // 检查是否绑定了 GitHub
-          if (userData.githubId) {
-            bindings.github = {
-              id: userData.githubId,
-              login: userData.githubLogin || 'GitHub用户'
-            }
-          }
         }
-        // GitHub 登录用户（id 以 gh_ 开头）
-        else if (userData?.id?.startsWith('gh_')) {
+        if (userData?.githubId || userData?.id?.startsWith('gh_')) {
           bindings.github = {
-            id: userData.id.replace('gh_', ''),
-            login: userData.name || 'GitHub用户'
+            id: userData.githubId || userData.id.replace('gh_', ''),
+            login: userData.githubLogin || (userData.id?.startsWith('gh_') ? userData.name : '') || 'GitHub用户'
           }
         }
 
@@ -217,6 +210,8 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
       if (!config?.enabled) { message.error('飞书登录未启用'); return }
       
       const state = Math.random().toString(36).substring(2)
+      sessionStorage.removeItem('github_bind_mode')
+      sessionStorage.setItem('feishu_bind_mode', 'true')
       sessionStorage.setItem('feishu_auth_state', state)
       const redirectUri = `${window.location.origin}/auth/callback`
       const authUrl = `https://open.feishu.cn/open-apis/authen/v1/authorize?` +
@@ -241,6 +236,7 @@ export default function Sidebar({ convCollapsed = false, onConvCollapse }: Sideb
         return
       }
 
+      sessionStorage.removeItem('feishu_bind_mode')
       sessionStorage.setItem('github_bind_mode', 'true')
       sessionStorage.setItem('github_auth_state', state)
 

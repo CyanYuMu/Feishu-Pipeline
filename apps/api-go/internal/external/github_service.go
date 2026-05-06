@@ -111,8 +111,8 @@ func (s *GitHubService) GetFileContent(ctx context.Context, token, owner, repo, 
 	return result.Content, sha, nil
 }
 
-// CreateFile 创建或更新文件
-func (s *GitHubService) CreateFile(ctx context.Context, token, owner, repo, path, branch, content, message, sha string) error {
+// CreateFile 创建或更新文件。GitHub Contents API 会在目标分支生成远程 commit，相当于完成 commit + push。
+func (s *GitHubService) CreateFile(ctx context.Context, token, owner, repo, path, branch, content, message, sha string) (string, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s", owner, repo, path)
 
 	body := map[string]any{
@@ -126,27 +126,36 @@ func (s *GitHubService) CreateFile(ctx context.Context, token, owner, repo, path
 
 	jsonData, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "PUT", url, strings.NewReader(string(jsonData)))
 	if err != nil {
-		return err
+		return "", err
 	}
 	s.setAuthHeader(req, token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("请求失败: %w", err)
+		return "", fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("GitHub API 错误: %d - %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("GitHub API 错误: %d - %s", resp.StatusCode, string(respBody))
 	}
-	return nil
+
+	var result struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	return result.Commit.SHA, nil
 }
 
 // ListFilesRecursive 递归列出文件
@@ -188,8 +197,8 @@ func (s *GitHubService) CreatePullRequest(ctx context.Context, token, owner, rep
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls", owner, repo)
 
 	reqBody := map[string]any{
-		"head": head,
-		"base": base,
+		"head":  head,
+		"base":  base,
 		"title": title,
 	}
 	if body != "" {
@@ -220,7 +229,7 @@ func (s *GitHubService) CreatePullRequest(ctx context.Context, token, owner, rep
 	}
 
 	var result struct {
-		Number int    `json:"number"`
+		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

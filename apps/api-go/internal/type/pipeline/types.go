@@ -50,6 +50,8 @@ type ExecuteChangesResponse struct {
 	AppliedFiles []string         `json:"appliedFiles"`
 	FailedFiles  []map[string]any `json:"failedFiles"`
 	Summary      string           `json:"summary"`
+	CommitSHA    string           `json:"commitSha,omitempty"`
+	PRMRURL      string           `json:"prmrUrl,omitempty"`
 }
 
 type ExecuteChangesEnvelope struct {

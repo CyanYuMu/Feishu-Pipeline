@@ -367,8 +367,13 @@
 
 - [x] 多 Agent 协作：同一阶段内多个 Agent 并行或协商工作
   - 说明：已实现多Agent并行执行框架，支持4种合并策略。代码生成和代码评审阶段已配置多Agent协作，分别从性能、可读性、安全性三个维度生成和评审代码，大幅提升输出质量。
-- [ ] 自动回归：当评审发现问题时，Agent 自动修复并重新提交，无需人工介入
-  - 说明：当前 Reject 后需人工触发重新执行，无自动修复逻辑
+- [x] 自动回归：当评审发现问题时，Agent 自动修复并重新提交，无需人工介入
+  - [x] Reject 后上一可执行阶段自动 queued
+  - [x] Reject 原因写入重做阶段 inputJson
+  - [x] 后续阶段与产物被重置或 superseded
+  - [x] Workflows 展示“回退重做”原因
+  - [ ] 最大重试次数配置化
+  - 说明：主体链路已具备，后续补最大重试次数与更细的修复轮次观测。
 - [x] 可观测性面板：Pipeline 运行状态的实时可视化
   - [x] 每个阶段的耗时统计
   - [x] Token 消耗记录
@@ -390,7 +395,9 @@
 - [x] Git 集成：自动创建分支、提交代码、发起 MR/PR
   - [x] 自动创建工作分支
   - [x] 代码变更执行与提交
+  - [x] 使用绑定 GitHub token 远程 commit/push
   - [x] PR/MR 自动创建
+  - [x] GitDelivery 记录 commitSha 与 prmrUrl
   - [x] 变更摘要生成
   - [x] GitHub 绑定入口读取后端 OAuth 配置，不再硬编码 clientId
   - [ ] 真实 GitHub OAuth App smoke：账号绑定、仓库列表、分支列表

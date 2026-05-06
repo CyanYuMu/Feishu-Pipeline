@@ -530,6 +530,7 @@ type ExecutionResult struct {
 	AppliedFiles []string         `json:"appliedFiles"`
 	FailedFiles  []map[string]any `json:"failedFiles"`
 	Summary      string           `json:"summary"`
+	CommitSHA    string           `json:"commitSha,omitempty"`
 }
 
 // ExecuteChanges 执行变更计划
@@ -550,7 +551,7 @@ func ExecuteChanges(ctx context.Context, gh *external.GitHubService, params Exec
 	}
 
 	for _, item := range params.ChangeSet {
-		err := gh.CreateFile(ctx, params.Token, owner, repo, item.FilePath, branch, item.NewContent,
+		commitSHA, err := gh.CreateFile(ctx, params.Token, owner, repo, item.FilePath, branch, item.NewContent,
 			fmt.Sprintf("Feishu Pipeline: %s", run.Title), item.SHA)
 
 		if err != nil {
@@ -560,6 +561,9 @@ func ExecuteChanges(ctx context.Context, gh *external.GitHubService, params Exec
 			})
 		} else {
 			result.AppliedFiles = append(result.AppliedFiles, item.FilePath)
+			if commitSHA != "" {
+				result.CommitSHA = commitSHA
+			}
 		}
 	}
 

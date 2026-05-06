@@ -264,6 +264,72 @@ func (s *AuthService) BindGitHubToUser(ctx context.Context, userID string, code 
 	return user, nil
 }
 
+// BindFeishuToUser 为当前已登录用户绑定飞书账号，不切换当前登录主体。
+func (s *AuthService) BindFeishuToUser(ctx context.Context, userID string, code string) (model.User, error) {
+	token, err := s.feishuClient.ExchangeCodeForUserToken(ctx, code)
+	if err != nil {
+		return model.User{}, err
+	}
+
+	profile, err := s.feishuClient.GetUserInfo(ctx, token.AccessToken)
+	if err != nil {
+		return model.User{}, err
+	}
+	if profile.OpenID == "" {
+		return model.User{}, errors.New("feishu open_id is empty")
+	}
+
+	if existing, findErr := s.repository.FindUserByFeishuOpenID(ctx, profile.OpenID); findErr == nil && existing.ID != userID {
+		return model.User{}, errors.New("该飞书账号已绑定到其他用户")
+	} else if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return model.User{}, findErr
+	}
+
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		return model.User{}, err
+	}
+
+	user.FeishuOpenID = profile.OpenID
+	if user.Name == "" || strings.HasPrefix(user.ID, "gh_") {
+		user.Name = utils.Coalesce(profile.Name, profile.EnName, user.Name, "飞书用户")
+	}
+	if user.Email == "" {
+		user.Email = utils.Coalesce(profile.EnterpriseEmail, profile.Email)
+	}
+	if user.AvatarURL == "" {
+		user.AvatarURL = profile.AvatarURL
+	}
+	if departments, classifyErr := s.resolveDepartments(ctx, token.AccessToken, profile); classifyErr == nil {
+		user.Departments = departments
+		if user.Role != model.RoleAdmin {
+			user.Role = classifyRoleByDepartments(departments)
+		}
+	}
+
+	now := time.Now().UTC()
+	credential := model.FeishuCredential{
+		ID:                    "cred_" + user.ID,
+		UserID:                user.ID,
+		OpenID:                profile.OpenID,
+		UnionID:               profile.UnionID,
+		FeishuUserID:          profile.FeishuUserID,
+		AccessToken:           token.AccessToken,
+		RefreshToken:          token.RefreshToken,
+		AccessTokenExpiresAt:  token.AccessTokenExpiresAt,
+		RefreshTokenExpiresAt: token.RefreshTokenExpiresAt,
+		LastLoginAt:           now,
+		LastRefreshAt:         now,
+	}
+	if err := s.repository.UpsertUser(ctx, &user); err != nil {
+		return model.User{}, err
+	}
+	if err := s.repository.SaveCredential(ctx, &credential); err != nil {
+		return model.User{}, err
+	}
+	return user, nil
+}
+
 // UnbindGitHubFromUser 解绑当前用户的 GitHub 账号
 func (s *AuthService) UnbindGitHubFromUser(ctx context.Context, userID string) (model.User, error) {
 	user, err := s.repository.FindUserByID(ctx, userID)

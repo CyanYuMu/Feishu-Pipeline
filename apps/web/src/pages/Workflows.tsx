@@ -758,6 +758,7 @@ function PipelineRail({ stages, currentStageKey, loading }: { stages: PipelineRu
             const done = stage.status === 'succeeded'
             const failed = stage.status === 'failed'
             const waiting = stage.status === 'waiting_approval'
+            const rejectReason = rejectReasonFromStage(stage)
             const dotClass = failed
               ? 'border-red-500 bg-red-50 text-red-600'
               : done
@@ -782,7 +783,10 @@ function PipelineRail({ stages, currentStageKey, loading }: { stages: PipelineRu
                   <div className="mt-2 line-clamp-2 min-h-8 text-[11px] leading-4 text-on-surface-variant">
                     {stageDescriptions[stage.stageKey] || stage.stageType}
                   </div>
-                  <Tag className="!mt-2" color={meta.color}>{meta.label}</Tag>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <Tag color={meta.color}>{meta.label}</Tag>
+                    {rejectReason ? <Tag color="warning">回退重做</Tag> : null}
+                  </div>
                 </div>
                 {index < stages.length - 1 ? (
                   <div className={`h-px w-8 ${done ? 'bg-green-400' : 'bg-outline-variant'}`} />
@@ -796,8 +800,19 @@ function PipelineRail({ stages, currentStageKey, loading }: { stages: PipelineRu
   )
 }
 
+function rejectReasonFromStage(stage: PipelineRunTimeline['stages'][number]): string {
+  if (!stage.inputJson) return ''
+  try {
+    const payload = JSON.parse(stage.inputJson) as { rejectReason?: string }
+    return payload.rejectReason || ''
+  } catch {
+    return ''
+  }
+}
+
 function StageRow({ stage, active }: { stage: PipelineRunTimeline['stages'][number]; active: boolean }) {
   const meta = stageStatusMeta(stage.status)
+  const rejectReason = rejectReasonFromStage(stage)
   return (
     <div className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${active ? 'border-primary bg-primary/5' : 'border-outline-variant bg-white'}`}>
       <div className={`flex h-8 w-8 items-center justify-center rounded-full ${stage.status === 'succeeded' ? 'bg-green-50 text-green-600' : 'bg-surface-container-high text-on-surface-variant'}`}>
@@ -808,6 +823,11 @@ function StageRow({ stage, active }: { stage: PipelineRunTimeline['stages'][numb
         <div className="mt-0.5 line-clamp-2 text-xs text-on-surface-variant">
           {stageDescriptions[stage.stageKey] || stage.stageType}
         </div>
+        {rejectReason ? (
+          <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+            回退重做原因：{rejectReason}
+          </div>
+        ) : null}
         <div className="mt-1 truncate text-[11px] text-on-surface-variant">
           {stage.stageKey} · attempt {stage.attempt} · {formatDateTime(stage.startedAt)} - {formatDateTime(stage.finishedAt)}
         </div>

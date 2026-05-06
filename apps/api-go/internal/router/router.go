@@ -36,6 +36,7 @@ func New(deps Dependencies) *gin.Engine {
 	authenticated := engine.Group("/api")
 	authenticated.Use(middleware.RequireAuth())
 	authenticated.GET("/me", deps.AuthController.Me)
+	authenticated.POST("/auth/feishu/bind", deps.AuthController.FeishuBind)
 	authenticated.POST("/auth/github/bind", deps.AuthController.GitHubBind)
 	authenticated.POST("/auth/github/unbind", deps.AuthController.GitHubUnbind)
 	authenticated.GET("/github/repos", deps.AuthController.GitHubRepos)

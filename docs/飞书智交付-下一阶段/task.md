@@ -17,6 +17,9 @@
 - [x] Diff 对话优先展示结构化 `code_diff` 产物，并保留 AgentRun diff 兜底
 - [x] Diff 对话复用 Workflows timeline 并缓存 `code-diff`，避免反复请求慢 `/current` 接口
 - [x] GitHub 绑定改为读取后端 OAuth 配置，移除前端硬编码 clientId
+- [x] Reject 时携带用户输入的回退原因，并在 Workflows 展示“回退重做”上下文
+- [x] execute-changes 使用绑定 GitHub token 完成远程 commit/push，并自动创建 PR
+- [x] GitDelivery 记录 commitSha 与 prmrUrl，前端执行变更后提示 commit/PR 结果
 - [ ] 真实飞书租户 smoke：docx 创建与消息送达
 - [ ] 真实 GitHub OAuth App smoke：账号绑定、仓库列表、分支列表
 - [ ] 真实演示 smoke：Pipeline 自动流转到首个 checkpoint

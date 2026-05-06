@@ -327,6 +327,8 @@ export interface ExecuteChangesResult {
   appliedFiles: string[]
   failedFiles: { filePath: string; error: string }[]
   summary: string
+  commitSha?: string
+  prmrUrl?: string
 }
 
 export async function executeChanges(runId: string, changeSet: ChangeSetItem[], token?: string): Promise<ExecuteChangesResult> {

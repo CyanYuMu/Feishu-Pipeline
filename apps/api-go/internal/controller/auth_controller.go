@@ -419,6 +419,34 @@ func (c *AuthController) SSOLogin(ctx *gin.Context) {
 	writeSuccess(ctx, http.StatusOK, authtype.NewLoginResponse(user))
 }
 
+// FeishuBind
+// @tags 认证
+// @summary 为当前用户绑定飞书账号
+// @router /api/auth/feishu/bind [POST]
+// @accept application/json
+// @produce application/json
+func (c *AuthController) FeishuBind(ctx *gin.Context) {
+	var request authtype.FeishuSSOLoginRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	userID := currentUserID(ctx)
+	if userID == "" {
+		writeError(ctx, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
+	user, err := c.authService.BindFeishuToUser(ctx.Request.Context(), userID, request.Code)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusOK, authtype.NewUserResponse(user))
+}
+
 // Logout
 // @tags 认证
 // @summary 登出

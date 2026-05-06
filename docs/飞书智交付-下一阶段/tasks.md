@@ -489,11 +489,13 @@ S3-6 Swagger、测试与演示验收
 - 说明：多Agent协作功能已完整实现，代码生成和代码评审阶段已默认启用多Agent模式，可通过模板配置灵活调整Agent数量、角色和合并策略。
 
 ### 10.2 S4-2：自动回归能力
-- [ ] 设计评审问题自动修复流程
-- [ ] 实现 Reject 原因的自动解析与理解
-- [ ] 支持 Agent 基于评审意见自动修复代码
-- [ ] 增加最大重试次数控制
-- [ ] 修复完成后自动重新提交评审
+- [x] 设计评审问题自动修复流程
+- [x] 实现 Reject 原因的自动解析与理解
+- [x] 支持 Agent 基于评审意见自动修复代码
+- [x] 修复完成后自动重新提交评审
+- [x] Workflows 展示回退重做原因，便于演示 Reject + 重做链路
+- [ ] 增加可配置最大重试次数控制
+- 说明：`RejectCheckpoint` 已将上一可执行阶段重置为 queued、写入 `rejectReason`、重置后续阶段和 superseded 产物，并重新投递后台队列；本轮补齐前端 Reject 原因传递和 Workflows 回退重做原因展示。最大重试次数仍待配置化。
 
 ### 10.3 S4-3：可观测性面板增强
 - [x] 实现 Pipeline 成功/失败率统计
@@ -547,10 +549,14 @@ S3-6 Swagger、测试与演示验收
 - 说明：已在后端种子中内置 `feature-delivery`、`bug-fix`、`refactor` 三类模板，并在 Workflows 新建 Pipeline 弹窗中支持选择模板；三类模板当前复用稳定的 8 阶段研发交付骨架，通过模板 definition 携带场景、默认策略和使用说明。模板在线编辑留到后续阶段。
 
 ### 10.6 S4-6：Git 集成增强
-- [ ] 实现代码变更的自动执行
-- [ ] 支持 MR/PR 创建的自动触发
-- [ ] 增加 MR/PR 状态的同步与展示
+- [x] 实现代码变更的自动执行
+- [x] 支持 MR/PR 创建的自动触发
+- [x] `execute-changes` 优先使用当前用户绑定的 GitHub token，无需前端手动传 token
+- [x] GitHub Contents API 写入文件时完成远程 commit/push，并记录 commit SHA
+- [x] PR 创建成功后写入 GitDelivery 的 `prmrUrl`，失败时返回 `__pull_request__` 失败项
+- [x] 增加 MR/PR 状态的同步与展示基础字段（commitSha / prmrUrl）
 - [ ] 实现代码合并后的状态回调
+- 说明：当前已打通“审批通过 -> execute-changes -> GitHub 工作分支 commit/push -> 创建 PR -> GitDelivery 记录 commit/PR”的赛题交付链路；合并后的 webhook 回调仍待开发。
 
 ---
 
