@@ -153,6 +153,22 @@ export interface PipelineRunTimeline {
   summary: PipelineRunSummary
 }
 
+export interface SessionMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  createdAt: string
+}
+
+export interface SessionDetail {
+  session: {
+    id: string
+    title: string
+    status: string
+  }
+  messages: SessionMessage[]
+}
+
 interface Envelope<T> {
   data?: T
   error?: string
@@ -192,6 +208,11 @@ export async function fetchPipelineCurrent(runId: string): Promise<PipelineRunCu
 export async function fetchPipelineDeliveries(runId: string): Promise<GitDelivery[]> {
   const data = await request<{ deliveries: GitDelivery[] }>(`/api/pipeline-runs/${runId}/deliveries`)
   return data.deliveries
+}
+
+export async function fetchPipelineAgentRuns(runId: string): Promise<AgentRun[]> {
+  const data = await request<{ agentRuns: AgentRun[] }>(`/api/pipeline-runs/${runId}/agent-runs`)
+  return data.agentRuns
 }
 
 export async function fetchGitDelivery(deliveryId: string): Promise<GitDelivery> {
