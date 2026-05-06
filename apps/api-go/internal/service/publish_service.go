@@ -162,6 +162,15 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 		return err
 	}
 
+	requirementDocURL := ""
+	if s.feishuClient != nil {
+		requirementDocURL, err = s.feishuClient.CreateRequirementDoc(ctx, output.Requirement, output.Tasks)
+		if err != nil {
+			log.Printf("publish session %s: create requirement doc failed: %v", payload.SessionID, err)
+			requirementDocURL = ""
+		}
+	}
+
 	deliveries := make([]model.MessageDelivery, 0, len(output.Tasks))
 	for idx := range output.Tasks {
 		docURL, err := s.feishuClient.CreateTaskDoc(ctx, aggregate.Session.Title, output.Tasks[idx])
@@ -213,10 +222,8 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 	}
 	log.Printf("publish workflow persisted: session_id=%s requirement_id=%s tasks=%d deliveries=%d", payload.SessionID, output.Requirement.ID, len(output.Tasks), len(deliveries))
 
-	// 发送需求确认卡片给发布者
-	s.sendApprovalCard(ctx, aggregate, output.Requirement)
-
 	// 自动创建对应的研发流水线
+	runID := ""
 	if s.pipelineService != nil {
 		// 获取默认模板
 		templates, err := s.pipelineService.ListPipelineTemplates(ctx)
@@ -232,15 +239,15 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 
 			if defaultTemplate != nil {
 				// 构建需求描述
-				requirementText := aggregate.Session.Title
-				if aggregate.Session.Summary != "" {
-					requirementText += "\n\n" + aggregate.Session.Summary
+				requirementText := buildPipelineRequirementText(output.Requirement, output.Tasks, requirementDocURL)
+				if requirementText == "" {
+					requirementText = aggregate.Session.Title
 				}
 
 				// 创建流水线
-				_, err = s.pipelineService.CreatePipelineRun(ctx, CreatePipelineRunInput{
+				detail, err := s.pipelineService.CreatePipelineRun(ctx, CreatePipelineRunInput{
 					TemplateID:      defaultTemplate.ID,
-					Title:           aggregate.Session.Title,
+					Title:           output.Requirement.Title,
 					RequirementText: requirementText,
 					TargetRepo:      "self", // 会话发布默认当前仓库
 					TargetBranch:    "main",
@@ -251,13 +258,75 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 				if err != nil {
 					log.Printf("自动创建流水线失败: session_id=%s err=%v", payload.SessionID, err)
 				} else {
-					log.Printf("自动创建流水线成功: session_id=%s", payload.SessionID)
+					runID = detail.Run.ID
+					if _, startErr := s.pipelineService.StartPipelineRun(ctx, detail.Run.ID); startErr != nil {
+						log.Printf("自动启动流水线失败: session_id=%s run_id=%s err=%v", payload.SessionID, detail.Run.ID, startErr)
+					} else {
+						log.Printf("自动创建并启动流水线成功: session_id=%s run_id=%s", payload.SessionID, detail.Run.ID)
+					}
 				}
 			}
 		}
 	}
 
+	s.sendRequirementDocMessage(ctx, aggregate, output.Requirement, requirementDocURL, runID)
+	_, _ = s.repository.AddMessage(ctx, payload.SessionID, model.MessageAssistant, buildPipelineStartedAssistantReply(output.Requirement, requirementDocURL, runID))
+
 	return nil
+}
+
+func buildPipelineRequirementText(requirement model.Requirement, tasks []model.Task, docURL string) string {
+	parts := []string{
+		"需求标题：" + requirement.Title,
+		"需求摘要：\n" + requirement.Summary,
+		"交付目标：\n" + requirement.DeliverySummary,
+	}
+	if strings.TrimSpace(docURL) != "" {
+		parts = append(parts, "飞书结构化需求文档："+docURL)
+	}
+	if len(requirement.ReferencedKnowledge) > 0 {
+		parts = append(parts, "参考知识：\n- "+strings.Join(requirement.ReferencedKnowledge, "\n- "))
+	}
+	if len(tasks) > 0 {
+		taskLines := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			taskLines = append(taskLines, strings.TrimSpace(task.Title+"："+task.Description))
+		}
+		parts = append(parts, "初始任务拆解：\n- "+strings.Join(taskLines, "\n- "))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func buildPipelineStartedAssistantReply(requirement model.Requirement, docURL string, runID string) string {
+	lines := []string{
+		"需求已确认，结构化需求文档已生成并发送到飞书。",
+		"标题：" + requirement.Title,
+	}
+	if strings.TrimSpace(docURL) != "" {
+		lines = append(lines, "文档："+docURL)
+	}
+	if strings.TrimSpace(runID) != "" {
+		lines = append(lines, "Pipeline 已自动启动："+runID)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (s *PublishService) sendRequirementDocMessage(ctx context.Context, aggregate *repo.SessionAggregate, requirement model.Requirement, docURL string, runID string) {
+	if s.feishuClient == nil {
+		log.Printf("sendRequirementDocMessage skipped: feishu client not available")
+		return
+	}
+	ownerOpenID := aggregate.Owner.FeishuOpenID
+	if ownerOpenID == "" {
+		log.Printf("sendRequirementDocMessage skipped: owner open_id is empty")
+		return
+	}
+	sendResult, err := s.feishuClient.SendRequirementDocMessage(ctx, ownerOpenID, requirement, docURL, runID)
+	if err != nil {
+		log.Printf("sendRequirementDocMessage failed: session_id=%s open_id=%s err=%v", aggregate.Session.ID, ownerOpenID, err)
+		return
+	}
+	log.Printf("sendRequirementDocMessage success: session_id=%s open_id=%s message_id=%s", aggregate.Session.ID, ownerOpenID, sendResult.RemoteID)
 }
 
 // sendApprovalCard 向发布者发送需求确认卡片

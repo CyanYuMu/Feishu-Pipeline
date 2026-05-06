@@ -13,12 +13,27 @@
 
 本次核验记录：
 
-- 核验日期：2026-04-26（Asia/Shanghai）
-- 后端命令：`cd apps/api-go && go test ./...`
-- 前端命令：`pnpm --filter web build`
-- 真实环境 smoke：Ark / `doubao-seed-2-0-lite-260215` 端到端 Pipeline 主闭环通过
-- 结果：通过
-- 说明：本次核验覆盖后端测试、前端构建、真实 Ark AgentRun、checkpoint reject/approve 和 GitDelivery 查询。
+- 核验日期：2026-05-06（Asia/Shanghai）
+- 后端命令：`cd apps/api-go && GOCACHE=/private/tmp/feishu-pipeline-go-build-cache go test ./...`
+- 前端命令：`pnpm --filter web exec tsc --noEmit`；`pnpm --filter web build`
+- 真实环境 smoke：待使用飞书配置验证文档创建、消息发送与 Pipeline 自动启动
+- 结果：本地测试与构建通过；真实飞书租户 smoke 待执行
+- 说明：本次核验重点覆盖会话确认需求后自动生成飞书需求文档、发送给飞书用户、创建并启动 Pipeline、前端会话页展示绑定 Pipeline。前端构建仅剩既有 chunk size warning。
+
+## 0. S4-0 对话确认到 Pipeline 自动衔接核验
+
+- [x] 会话发布意图包含“需求确认完成”“进入流水线”“开始流水线”等表达
+- [x] 发布流程生成结构化需求归档后创建飞书需求文档
+- [x] 飞书需求文档内容包含需求摘要、交付目标、验收标准、任务拆解
+- [x] 飞书 bot 会把结构化需求文档发送给会话归属用户
+- [x] 自动创建的 PipelineRun 绑定 `sourceSessionId`
+- [x] 自动创建 PipelineRun 后立即调用 start 进入队列
+- [x] PipelineRun 的 requirementText 包含需求摘要、交付目标、文档链接和初始任务拆解
+- [x] 会话页可展示绑定 PipelineRun 的状态和当前阶段
+- [x] 会话页可跳转到对应 Pipeline 工作台
+- [ ] 使用真实飞书配置 smoke：确认 docx 创建成功
+- [ ] 使用真实飞书配置 smoke：确认用户收到需求文档消息
+- [ ] 使用真实 AI/或 fallback smoke：确认 Pipeline 自动跑到首个 checkpoint
 
 ---
 

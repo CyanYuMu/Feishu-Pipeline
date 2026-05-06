@@ -1,10 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { Tree, Spin, Empty, Typography, Tabs } from 'antd';
-import { Diff, parseDiff, Hunk, File } from 'react-diff-view';
+import { Tree, Spin, Empty, Typography } from 'antd';
+import { Diff, parseDiff, Hunk } from 'react-diff-view';
 import 'react-diff-view/style/index.css';
 
 const { Title, Text } = Typography;
-const { TabPane } = Tabs;
 
 export interface ChangeItem {
   filePath: string;
@@ -69,34 +68,6 @@ const CodeDiffViewer: React.FC<CodeDiffViewerProps> = ({
 
   const selectedChange = changeSet.find(item => item.filePath === selectedFile);
 
-  // 根据文件后缀获取语言类型
-  const getFileLanguage = (filePath: string) => {
-    const ext = filePath.split('.').pop()?.toLowerCase() || '';
-    const langMap: Record<string, string> = {
-      'go': 'go',
-      'ts': 'typescript',
-      'tsx': 'tsx',
-      'js': 'javascript',
-      'jsx': 'jsx',
-      'py': 'python',
-      'java': 'java',
-      'cpp': 'cpp',
-      'c': 'c',
-      'cs': 'csharp',
-      'rb': 'ruby',
-      'rs': 'rust',
-      'swift': 'swift',
-      'kt': 'kotlin',
-      'html': 'html',
-      'css': 'css',
-      'json': 'json',
-      'yaml': 'yaml',
-      'yml': 'yaml',
-      'md': 'markdown',
-    };
-    return langMap[ext] || 'text';
-  };
-
   // 手动构建diff格式
   const diffText = useMemo(() => {
     if (!selectedChange) return '';
@@ -146,7 +117,6 @@ ${generateUnifiedDiff(originalContent || '', proposedPatch || '')}`;
               viewType="split"
               diffType="modify"
               hunks={files[0].hunks}
-              language={getFileLanguage(selectedChange.filePath)}
               className="!max-h-[600px]"
             >
               {(hunks) => hunks.map(hunk => <Hunk key={hunk.content} hunk={hunk} />)}

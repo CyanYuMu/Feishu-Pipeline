@@ -3,10 +3,10 @@ import { useParams } from '@tanstack/react-router'
 import { Bubble, Sender } from '@ant-design/x'
 import type { BubbleListProps } from '@ant-design/x'
 import XMarkdown from '@ant-design/x-markdown'
-import { Avatar, Button, message } from 'antd'
-import { UserOutlined, RobotOutlined } from '@ant-design/icons'
+import { Avatar, Button, Tag, message } from 'antd'
+import { BranchesOutlined, UserOutlined, RobotOutlined } from '@ant-design/icons'
 import Sidebar from '../components/Sidebar'
-import { fetchPipelineRuns } from '../lib/pipeline'
+import { fetchPipelineRuns, runStatusMeta, stageLabel, type PipelineRun } from '../lib/pipeline'
 
 interface Message {
   id: string
@@ -46,6 +46,8 @@ export default function Session() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [resolvingApproval, setResolvingApproval] = useState(false)
+  const [sessionRuns, setSessionRuns] = useState<PipelineRun[]>([])
+  const [loadingRuns, setLoadingRuns] = useState(false)
   const [convCollapsed, setConvCollapsed] = useState(false)
   const sidebarWidth = convCollapsed ? 80 : 336 // 折叠 80，展开 80+256=336
   // 防止首条消息重复发送
@@ -64,6 +66,19 @@ export default function Session() {
   useEffect(() => {
     sendingRef.current = sending
   }, [sending])
+
+  const refreshSessionRuns = useCallback(async () => {
+    if (!sessionId) return
+    setLoadingRuns(true)
+    try {
+      const runs = await fetchPipelineRuns()
+      setSessionRuns(runs.filter(item => item.sourceSessionId === sessionId))
+    } catch (err) {
+      console.error('Failed to load session pipeline runs:', err)
+    } finally {
+      setLoadingRuns(false)
+    }
+  }, [sessionId])
 
   // 发送消息（抽出独立函数，供手动发送和自动发送复用）
   const sendMessage = useCallback(async (content: string) => {
@@ -175,6 +190,7 @@ export default function Session() {
           ],
         }
       })
+      window.setTimeout(() => void refreshSessionRuns(), 1200)
 
     } catch (err) {
       console.error('Failed to send message:', err)
@@ -186,7 +202,7 @@ export default function Session() {
       sendingRef.current = false
       setSending(false)
     }
-  }, [sessionId])
+  }, [refreshSessionRuns, sessionId])
 
   // 获取会话详情，加载完毕后检查是否有待发消息（从 Home 跳转过来的首条消息）
   useEffect(() => {
@@ -212,6 +228,20 @@ export default function Session() {
       .finally(() => setLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
+
+  useEffect(() => {
+    void refreshSessionRuns()
+  }, [refreshSessionRuns])
+
+  useEffect(() => {
+    if (sessionRuns.length === 0) return
+    const hasLiveRun = sessionRuns.some(run => ['queued', 'running', 'waiting_approval'].includes(run.status))
+    if (!hasLiveRun) return
+    const timer = window.setInterval(() => {
+      void refreshSessionRuns()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [refreshSessionRuns, sessionRuns])
 
   // 构建 Bubble.List items
   const bubbleItems: BubbleListProps['items'] = (session?.messages ?? []).map(msg => {
@@ -243,6 +273,7 @@ export default function Session() {
 
   const sidebarProps = { convCollapsed, onConvCollapse: setConvCollapsed }
   const approvalTaskID = session?.tasks?.[0]?.id || ''
+  const latestRun = sessionRuns[0]
   const handleGoToApproval = useCallback(async () => {
     if (!session?.session.id) return
     setResolvingApproval(true)
@@ -261,6 +292,11 @@ export default function Session() {
       setResolvingApproval(false)
     }
   }, [session?.session.id])
+
+  const handleGoToPipeline = useCallback(() => {
+    if (!latestRun) return
+    window.location.assign(`/workflows?runId=${encodeURIComponent(latestRun.id)}`)
+  }, [latestRun])
 
   if (loading) {
     return (
@@ -295,15 +331,31 @@ export default function Session() {
         <div className="h-14 px-6 flex items-center border-b border-slate-100 bg-white/80 backdrop-blur flex-shrink-0">
           <div className="flex w-full items-center justify-between gap-3">
             <h1 className="text-base font-semibold text-slate-800 truncate">{session.session.title}</h1>
-            {approvalTaskID ? (
-              <Button
-                size="small"
-                loading={resolvingApproval}
-                onClick={() => void handleGoToApproval()}
-              >
-                进入审批
-              </Button>
-            ) : null}
+            <div className="flex shrink-0 items-center gap-2">
+              {latestRun ? (
+                <>
+                  <Tag color={runStatusMeta(latestRun.status).color}>{runStatusMeta(latestRun.status).label}</Tag>
+                  <span className="hidden text-xs text-slate-500 md:inline">{stageLabel(latestRun.currentStageKey)}</span>
+                  <Button
+                    size="small"
+                    icon={<BranchesOutlined />}
+                    loading={loadingRuns}
+                    onClick={() => void handleGoToPipeline()}
+                  >
+                    进入 Pipeline
+                  </Button>
+                </>
+              ) : null}
+              {approvalTaskID ? (
+                <Button
+                  size="small"
+                  loading={resolvingApproval}
+                  onClick={() => void handleGoToApproval()}
+                >
+                  进入审批
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -340,4 +392,3 @@ export default function Session() {
     </div>
   )
 }
-

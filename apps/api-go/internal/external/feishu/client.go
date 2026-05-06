@@ -526,6 +526,46 @@ func (c *Client) CreateTaskDoc(ctx context.Context, sessionTitle string, task mo
 	return fmt.Sprintf("https://feishu.cn/docx/%s", url.PathEscape(response.Data.Document.DocumentID)), nil
 }
 
+func (c *Client) CreateRequirementDoc(ctx context.Context, requirement model.Requirement, tasks []model.Task) (string, error) {
+	if !c.Enabled() || c.cfg.DocFolderToken == "" {
+		return fmt.Sprintf("%s/mock/feishu/requirements/%s", c.cfg.BaseURL, requirement.ID), nil
+	}
+
+	appAccessToken, err := c.GetAppAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var response struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Document struct {
+				DocumentID string `json:"document_id"`
+			} `json:"document"`
+		} `json:"data"`
+	}
+
+	if err := c.doJSONWithToken(ctx, http.MethodPost, "/open-apis/docx/v1/documents", appAccessToken, map[string]any{
+		"folder_token": c.cfg.DocFolderToken,
+		"title":        fmt.Sprintf("需求文档-%s", requirement.Title),
+	}, &response); err != nil {
+		return "", err
+	}
+	if response.Code != 0 {
+		return "", fmt.Errorf("create feishu requirement doc failed: %s", response.Msg)
+	}
+	if response.Data.Document.DocumentID == "" {
+		return "", errors.New("feishu requirement document id is empty")
+	}
+
+	if err := c.appendDocumentContent(ctx, appAccessToken, response.Data.Document.DocumentID, buildRequirementDocMarkdown(requirement, tasks)); err != nil {
+		return "", fmt.Errorf("append requirement doc content failed: %w", err)
+	}
+
+	return fmt.Sprintf("https://feishu.cn/docx/%s", url.PathEscape(response.Data.Document.DocumentID)), nil
+}
+
 func (c *Client) appendDocumentContent(ctx context.Context, appAccessToken string, documentID string, markdownContent string) error {
 	documentID = strings.TrimSpace(documentID)
 	if documentID == "" {
@@ -602,6 +642,47 @@ func chunkParagraphBlocks(items []map[string]any, size int) [][]map[string]any {
 		chunks = append(chunks, items[start:end])
 	}
 	return chunks
+}
+
+func buildRequirementDocMarkdown(requirement model.Requirement, tasks []model.Task) string {
+	lines := []string{
+		"# " + requirement.Title,
+		"## 需求摘要",
+		requirement.Summary,
+		"## 交付目标",
+		requirement.DeliverySummary,
+		"## 验收标准",
+	}
+	if len(tasks) == 0 {
+		lines = append(lines, "- 待 Pipeline 需求分析阶段补全")
+	}
+	for _, task := range tasks {
+		if len(task.AcceptanceCriteria) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("### %s", task.Title))
+		for _, item := range task.AcceptanceCriteria {
+			lines = append(lines, "- "+item)
+		}
+	}
+	lines = append(lines, "## 任务拆解")
+	for _, task := range tasks {
+		lines = append(lines,
+			fmt.Sprintf("### %s", task.Title),
+			fmt.Sprintf("- 类型：%s", task.Type),
+			fmt.Sprintf("- 优先级：%s", task.Priority),
+			fmt.Sprintf("- 负责人：%s", utils.Coalesce(task.AssigneeName, string(task.AssigneeRole))),
+			fmt.Sprintf("- 预估：%d 天", task.EstimateDays),
+			task.Description,
+		)
+		if len(task.Risks) > 0 {
+			lines = append(lines, "风险：")
+			for _, risk := range task.Risks {
+				lines = append(lines, "- "+risk)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (c *Client) UpsertTaskRecord(ctx context.Context, task model.Task) (TaskRecordResult, error) {
@@ -723,6 +804,48 @@ func (c *Client) SendTaskMessage(ctx context.Context, task model.Task) (SendResu
 	}, nil
 }
 
+func (c *Client) SendRequirementDocMessage(ctx context.Context, openID string, requirement model.Requirement, docURL string, runID string) (SendResult, error) {
+	text := fmt.Sprintf("需求已确认并进入 DevFlow Pipeline：%s\n结构化需求文档：%s", requirement.Title, utils.Coalesce(docURL, "待生成"))
+	if strings.TrimSpace(runID) != "" {
+		text += "\nPipeline Run：" + runID
+	}
+	payload, _ := json.Marshal(map[string]string{"text": text})
+	content := string(payload)
+
+	if !c.Enabled() || strings.TrimSpace(openID) == "" {
+		return SendResult{
+			Channel:    "feishu-bot",
+			Receiver:   openID,
+			Status:     "mock_sent",
+			RemoteID:   "mock_requirement_" + requirement.ID,
+			RawPayload: content,
+		}, nil
+	}
+
+	resp, err := c.sdk.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(c.cfg.ReceiveIDType).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(openID).
+			MsgType("text").
+			Content(content).
+			Build()).
+		Build())
+	if err != nil {
+		return SendResult{}, err
+	}
+	if !resp.Success() {
+		return SendResult{}, fmt.Errorf("send requirement doc message failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	return SendResult{
+		Channel:    "feishu-bot",
+		Receiver:   openID,
+		Status:     "accepted",
+		RemoteID:   stringValue(resp.Data.MessageId),
+		RawPayload: content,
+	}, nil
+}
+
 // ApprovalCardPayload 需求确认卡片内容结构
 type ApprovalCardPayload struct {
 	Title       string // 需求标题
@@ -737,10 +860,10 @@ type ApprovalCardPayload struct {
 func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, payload ApprovalCardPayload) (SendResult, error) {
 	if !c.Enabled() || strings.TrimSpace(openID) == "" {
 		return SendResult{
-			Channel:  "feishu-bot",
-			Receiver: openID,
-			Status:   "mock_sent",
-			RemoteID: "mock_card_" + payload.SessionID,
+			Channel:    "feishu-bot",
+			Receiver:   openID,
+			Status:     "mock_sent",
+			RemoteID:   "mock_card_" + payload.SessionID,
 			RawPayload: fmt.Sprintf("mock card for requirement: %s", payload.Title),
 		}, nil
 	}
@@ -761,7 +884,7 @@ func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, pay
 		"elements": []any{
 			// 标题区域
 			map[string]any{
-				"tag": "markdown",
+				"tag":     "markdown",
 				"content": fmt.Sprintf("## 📋 **%s**", payload.Title),
 			},
 			// 分隔线
@@ -770,12 +893,12 @@ func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, pay
 			},
 			// 需求摘要
 			map[string]any{
-				"tag": "markdown",
+				"tag":     "markdown",
 				"content": fmt.Sprintf("**📝 需求摘要**\n%s", payload.Summary),
 			},
 			// 详细描述（如果有）
 			map[string]any{
-				"tag": "markdown",
+				"tag":     "markdown",
 				"content": fmt.Sprintf("**📄 详细需求**\n%s", payload.Requirement),
 			},
 			// 分隔线
@@ -784,7 +907,7 @@ func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, pay
 			},
 			// 提示信息
 			map[string]any{
-				"tag": "markdown",
+				"tag":     "markdown",
 				"content": "⚠️ 请确认需求细节是否完整准确，点击下方按钮进行审批",
 			},
 			// 按钮区域
@@ -797,16 +920,16 @@ func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, pay
 							"tag":     "plain_text",
 							"content": "✅ 确认发布",
 						},
-						"type": "primary",
+						"type":   "primary",
 						"intent": "approve",
 					},
 					map[string]any{
 						"tag": "button",
-							"text": map[string]any{
+						"text": map[string]any{
 							"tag":     "plain_text",
 							"content": "❌ 补充信息",
 						},
-						"type": "danger",
+						"type":   "danger",
 						"intent": "reject",
 					},
 				},

@@ -169,22 +169,6 @@ export interface PipelineRunTimeline {
   summary: PipelineRunSummary
 }
 
-export interface SessionMessage {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  createdAt: string
-}
-
-export interface SessionDetail {
-  session: {
-    id: string
-    title: string
-    status: string
-  }
-  messages: SessionMessage[]
-}
-
 interface Envelope<T> {
   data?: T
   error?: string

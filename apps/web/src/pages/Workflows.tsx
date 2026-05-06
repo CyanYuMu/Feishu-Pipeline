@@ -95,7 +95,8 @@ export default function Workflows() {
     try {
       const items = await fetchPipelineRuns()
       setRuns(items)
-      const firstId = items[0]?.id
+      const queryRunId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('runId')?.trim() : ''
+      const firstId = queryRunId && items.some(item => item.id === queryRunId) ? queryRunId : items[0]?.id
       if (firstId && firstId !== 'undefined') {
         setSelectedRunId(firstId)
       }
