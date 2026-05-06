@@ -4,6 +4,7 @@ import { CloseOutlined, DownOutlined, LeftOutlined, RightOutlined, SendOutlined,
 import { useRouterState } from '@tanstack/react-router'
 import {
   approveCheckpoint,
+  fetchCodeDiff,
   fetchSessionDetail,
   fetchPipelineAgentRuns,
   fetchPipelineCurrent,
@@ -12,6 +13,8 @@ import {
   sendSessionMessage,
   stageLabel,
   type AgentRun,
+  type ChangeItem,
+  type CodeDiffResponse,
   type PipelineRunCurrent,
   type SessionMessage,
 } from '../lib/pipeline'
@@ -156,6 +159,35 @@ function renderUnifiedDiff(before: string, after: string) {
   )
 }
 
+function renderGitPatchText(patch: string) {
+  const raw = patch || ''
+  const lines = raw.split('\n')
+  return (
+    <div className="max-h-40 overflow-auto rounded border border-slate-800 bg-[#0b1020] p-2 font-mono text-[11px] leading-5 text-slate-200">
+      {lines.length === 0 || (lines.length === 1 && lines[0] === '') ? (
+        <div className="text-slate-500">(无 diff 文本)</div>
+      ) : null}
+      {lines.map((line, idx) => {
+        let cls = 'text-slate-300'
+        if (line.startsWith('+++ ') || line.startsWith('--- ') || line.startsWith('diff --git')) cls = 'text-sky-300/90'
+        else if (line.startsWith('@@')) cls = 'text-amber-200/90'
+        else if (line.startsWith('+')) cls = 'bg-emerald-500/15 text-emerald-100'
+        else if (line.startsWith('-')) cls = 'bg-rose-500/15 text-rose-100'
+        return (
+          <div key={`gp_${idx}`} className={`whitespace-pre-wrap break-all rounded px-0.5 ${cls}`}>
+            {line}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function normalizeChangeSet(items: unknown): ChangeItem[] {
+  if (!Array.isArray(items)) return []
+  return items as ChangeItem[]
+}
+
 export default function PipelineChatPanel({ runId: runIdProp, embedded, onRequestClose, onTimelineDirty }: PipelineChatPanelProps = {}) {
   const location = useRouterState({ select: state => state.location })
   const [collapsed, setCollapsed] = useState(false)
@@ -167,6 +199,8 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
   const [sending, setSending] = useState(false)
   const [deciding, setDeciding] = useState<'approve' | 'reject' | null>(null)
   const [diffExpanded, setDiffExpanded] = useState(true)
+  const [codeDiff, setCodeDiff] = useState<CodeDiffResponse | null>(null)
+  const [codeDiffLoading, setCodeDiffLoading] = useState(false)
   const messagesRef = useRef<HTMLDivElement | null>(null)
 
   const runId = (runIdProp && runIdProp.trim()) || extractRunId(location.pathname, location.searchStr)
@@ -178,21 +212,30 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
   const canDecide = Boolean(checkpointId && current?.run?.status === 'waiting_approval' && !deciding)
   const canSend = Boolean(sessionId && input.trim() && !sending)
   const diff = extractDiffPreview(latestAgentRun)
+  const changeSet = normalizeChangeSet(codeDiff?.changeSet)
+  const hasApiDiff = changeSet.some(item => (item.proposedDiff || '').trim().length > 0) || Boolean((codeDiff?.summary || '').trim())
   const shouldShowDecision = Boolean(canDecide && latestAgentRun)
   const lastAssistantMessageId = [...chatMessages].reverse().find(item => item.role === 'assistant')?.id
 
   const reloadRunContext = async (targetRunId: string) => {
-    const [currentData, agentRunData] = await Promise.all([
-      fetchPipelineCurrent(targetRunId),
-      fetchPipelineAgentRuns(targetRunId),
-    ])
-    setCurrent(currentData)
-    setAgentRuns(agentRunData)
-    if (currentData.run.sourceSessionId) {
-      const sessionDetail = await fetchSessionDetail(currentData.run.sourceSessionId)
-      setChatMessages(mapSessionMessages(sessionDetail.messages))
-    } else {
-      setChatMessages([])
+    setCodeDiffLoading(true)
+    try {
+      const [currentData, agentRunData, diffResult] = await Promise.all([
+        fetchPipelineCurrent(targetRunId),
+        fetchPipelineAgentRuns(targetRunId),
+        fetchCodeDiff(targetRunId).catch(() => null),
+      ])
+      setCurrent(currentData)
+      setAgentRuns(agentRunData)
+      setCodeDiff(diffResult)
+      if (currentData.run.sourceSessionId) {
+        const sessionDetail = await fetchSessionDetail(currentData.run.sourceSessionId)
+        setChatMessages(mapSessionMessages(sessionDetail.messages))
+      } else {
+        setChatMessages([])
+      }
+    } finally {
+      setCodeDiffLoading(false)
     }
   }
 
@@ -202,6 +245,8 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
 
   useEffect(() => {
     if (isDemoMode) {
+      setCodeDiff(null)
+      setCodeDiffLoading(false)
       setCurrent({
         run: {
           id: 'run_demo',
@@ -271,6 +316,7 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
           if (!cancelled) {
             setCurrent(null)
             setAgentRuns([])
+            setCodeDiff(null)
           }
           return
         }
@@ -389,6 +435,43 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
     }
   }
 
+  const renderCodeDiffBody = () => {
+    if (codeDiffLoading) {
+      return (
+        <div className="flex items-center gap-2 text-slate-500">
+          <Spin size="small" />
+          同步流水线 diff...
+        </div>
+      )
+    }
+    if (hasApiDiff) {
+      return (
+        <div className="space-y-2">
+          {codeDiff?.summary?.trim() ? (
+            <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] leading-relaxed text-slate-600">
+              {codeDiff.summary}
+            </pre>
+          ) : null}
+          {changeSet.length > 0
+            ? changeSet.map((item, i) => (
+                <div key={`${item.filePath || 'f'}_${i}`} className="space-y-1">
+                  <div className="text-[11px] font-medium text-slate-600">
+                    {item.filePath || `变更 ${i + 1}`}
+                    {item.changeType ? <span className="ml-2 font-normal text-slate-400">[{item.changeType}]</span> : null}
+                  </div>
+                  {renderGitPatchText(item.proposedDiff || '')}
+                </div>
+              ))
+            : null}
+          {codeDiff?.updatedAt ? (
+            <div className="text-[10px] text-slate-400">更新于 {new Date(codeDiff.updatedAt).toLocaleString('zh-CN')}</div>
+          ) : null}
+        </div>
+      )
+    }
+    return renderUnifiedDiff(diff.before || '', diff.after || '')
+  }
+
   return (
     <div className={`fixed right-0 top-0 z-40 h-screen border-l border-slate-200 bg-white shadow-xl transition-all duration-200 ${collapsed ? 'w-12' : 'w-[420px]'}`}>
       <div className="flex h-full flex-col">
@@ -425,6 +508,24 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
               {resolvingData ? (
                 <div className="flex items-center gap-2 text-slate-500"><Spin size="small" /> 加载上下文...</div>
               ) : null}
+              {!resolvingData && agentRuns.length === 0 && hasApiDiff ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-white px-3 py-2 text-xs shadow-sm">
+                    <div className="mb-1 font-medium text-slate-600">代码变更（流水线）</div>
+                    <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between text-left text-[11px] font-medium text-slate-600"
+                        onClick={() => setDiffExpanded(prev => !prev)}
+                      >
+                        <span>代码 diff · GET /code-diff</span>
+                        {diffExpanded ? <UpOutlined /> : <DownOutlined />}
+                      </button>
+                      {diffExpanded ? <div className="space-y-2">{renderCodeDiffBody()}</div> : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {agentRuns.map(run => (
                 <div key={run.id} className="flex justify-start">
                   <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-white px-3 py-2 text-xs shadow-sm">
@@ -437,12 +538,12 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
                           className="flex w-full items-center justify-between text-left text-[11px] font-medium text-slate-600"
                           onClick={() => setDiffExpanded(prev => !prev)}
                         >
-                          <span>代码 diff（当前版本）</span>
+                          <span>{hasApiDiff ? '代码 diff（流水线 /code-diff）' : '代码 diff（Agent 输入/输出对比）'}</span>
                           {diffExpanded ? <UpOutlined /> : <DownOutlined />}
                         </button>
                         {diffExpanded ? (
                           <div className="space-y-2">
-                            {renderUnifiedDiff(diff.before || '', diff.after || '')}
+                            {renderCodeDiffBody()}
                           </div>
                         ) : null}
                       </div>
@@ -480,7 +581,7 @@ export default function PipelineChatPanel({ runId: runIdProp, embedded, onReques
                   </div>
                 </div>
               ))}
-              {!resolvingData && agentRuns.length === 0 && chatMessages.length === 0 ? (
+              {!resolvingData && agentRuns.length === 0 && chatMessages.length === 0 && !hasApiDiff ? (
                 <div className="text-xs text-slate-400">暂无可展示消息，进入审批节点后会显示 Agent 记录。</div>
               ) : null}
             </div>

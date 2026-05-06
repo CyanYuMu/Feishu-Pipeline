@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useParams } from '@tanstack/react-router'
+import { useNavigate, useParams } from '@tanstack/react-router'
 import { Bubble, Sender } from '@ant-design/x'
 import type { BubbleListProps } from '@ant-design/x'
 import XMarkdown from '@ant-design/x-markdown'
+<<<<<<< HEAD
 import { Avatar, Button, Tag, message } from 'antd'
 import { BranchesOutlined, UserOutlined, RobotOutlined } from '@ant-design/icons'
 import Sidebar from '../components/Sidebar'
 import { fetchPipelineRuns, runStatusMeta, stageLabel, type PipelineRun } from '../lib/pipeline'
+=======
+import { Avatar, Button, Form, Input, Modal, Space, message } from 'antd'
+import { UserOutlined, RobotOutlined } from '@ant-design/icons'
+import Sidebar from '../components/Sidebar'
+import { createPipelineRunFromSession, fetchPipelineRuns, startPipelineRun, type PipelineRun } from '../lib/pipeline'
+>>>>>>> afa286698b5abaf48b72d3c492bc7b0ab40399ab
 
 interface Message {
   id: string
@@ -39,6 +46,7 @@ const LOADING_MSG_ID = '__loading__'
 const STREAMING_MSG_ID = '__streaming__'
 
 export default function Session() {
+  const navigate = useNavigate()
   const { sessionId } = useParams({ strict: false })
   const [session, setSession] = useState<SessionDetail | null>(null)
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
@@ -46,8 +54,15 @@ export default function Session() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [resolvingApproval, setResolvingApproval] = useState(false)
+<<<<<<< HEAD
   const [sessionRuns, setSessionRuns] = useState<PipelineRun[]>([])
   const [loadingRuns, setLoadingRuns] = useState(false)
+=======
+  const [linkedPipelineRuns, setLinkedPipelineRuns] = useState<PipelineRun[]>([])
+  const [pipelineModalOpen, setPipelineModalOpen] = useState(false)
+  const [pipelineSubmitting, setPipelineSubmitting] = useState(false)
+  const [pipelineForm] = Form.useForm<{ targetRepo: string; targetBranch: string }>()
+>>>>>>> afa286698b5abaf48b72d3c492bc7b0ab40399ab
   const [convCollapsed, setConvCollapsed] = useState(false)
   const sidebarWidth = convCollapsed ? 80 : 336 // 折叠 80，展开 80+256=336
   // 防止首条消息重复发送
@@ -241,6 +256,7 @@ export default function Session() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
+<<<<<<< HEAD
   useEffect(() => {
     void refreshSessionRuns()
   }, [refreshSessionRuns])
@@ -254,6 +270,50 @@ export default function Session() {
     }, 5000)
     return () => window.clearInterval(timer)
   }, [refreshSessionRuns, sessionRuns])
+=======
+  const refreshLinkedPipelines = useCallback(async (sid: string) => {
+    try {
+      const runs = await fetchPipelineRuns()
+      setLinkedPipelineRuns(runs.filter(item => item.sourceSessionId === sid))
+    } catch {
+      setLinkedPipelineRuns([])
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!session?.session.id) return
+    void refreshLinkedPipelines(session.session.id)
+  }, [session?.session.id, refreshLinkedPipelines])
+
+  const openLatestWorkflow = useCallback(
+    (runId: string) => {
+      navigate({ to: '/workflows', search: { runId } })
+    },
+    [navigate],
+  )
+
+  const submitPipelineFromSession = useCallback(async () => {
+    if (!sessionId) return
+    const { targetRepo, targetBranch } = await pipelineForm.validateFields()
+    setPipelineSubmitting(true)
+    try {
+      const detail = await createPipelineRunFromSession({
+        sessionId,
+        targetRepo: targetRepo?.trim() || 'self',
+        targetBranch: targetBranch?.trim() || 'main',
+      })
+      await startPipelineRun(detail.run.id)
+      message.success('已创建并启动研发流水线')
+      setPipelineModalOpen(false)
+      await refreshLinkedPipelines(sessionId)
+      openLatestWorkflow(detail.run.id)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '创建流水线失败')
+    } finally {
+      setPipelineSubmitting(false)
+    }
+  }, [sessionId, pipelineForm, refreshLinkedPipelines, openLatestWorkflow])
+>>>>>>> afa286698b5abaf48b72d3c492bc7b0ab40399ab
 
   // 构建 Bubble.List items
   const bubbleItems: BubbleListProps['items'] = (session?.messages ?? []).map(msg => {
@@ -297,13 +357,13 @@ export default function Session() {
         return
       }
       const targetRun = sessionRuns.find(item => item.status === 'waiting_approval') || sessionRuns[0]
-      window.location.assign(`/monitoring?runId=${encodeURIComponent(targetRun.id)}&action=approve`)
+      navigate({ to: '/workflows', search: { runId: targetRun.id } })
     } catch (err) {
       message.error(err instanceof Error ? err.message : '获取审批上下文失败')
     } finally {
       setResolvingApproval(false)
     }
-  }, [session?.session.id])
+  }, [session?.session.id, navigate])
 
   const handleGoToPipeline = useCallback(() => {
     if (!latestRun) return
@@ -343,6 +403,7 @@ export default function Session() {
         <div className="h-14 px-6 flex items-center border-b border-slate-100 bg-white/80 backdrop-blur flex-shrink-0">
           <div className="flex w-full items-center justify-between gap-3">
             <h1 className="text-base font-semibold text-slate-800 truncate">{session.session.title}</h1>
+<<<<<<< HEAD
             <div className="flex shrink-0 items-center gap-2">
               {latestRun ? (
                 <>
@@ -357,6 +418,31 @@ export default function Session() {
                     进入 Pipeline
                   </Button>
                 </>
+=======
+            <Space size="small" wrap>
+              <Button
+                type="primary"
+                size="small"
+                onClick={() => {
+                  pipelineForm.setFieldsValue({ targetRepo: 'self', targetBranch: 'main' })
+                  setPipelineModalOpen(true)
+                }}
+              >
+                确认需求并进入流水线
+              </Button>
+              {linkedPipelineRuns.length > 0 ? (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    const latest = [...linkedPipelineRuns].sort(
+                      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+                    )[0]
+                    openLatestWorkflow(latest.id)
+                  }}
+                >
+                  打开已有流水线
+                </Button>
+>>>>>>> afa286698b5abaf48b72d3c492bc7b0ab40399ab
               ) : null}
               {approvalTaskID ? (
                 <Button
@@ -367,7 +453,11 @@ export default function Session() {
                   进入审批
                 </Button>
               ) : null}
+<<<<<<< HEAD
             </div>
+=======
+            </Space>
+>>>>>>> afa286698b5abaf48b72d3c492bc7b0ab40399ab
           </div>
         </div>
 
@@ -400,6 +490,28 @@ export default function Session() {
           />
           <p className="text-center text-xs text-slate-400 mt-2">内容由 AI 生成，请仔细甄别</p>
         </div>
+
+        <Modal
+          title="从会话创建研发流水线"
+          open={pipelineModalOpen}
+          onCancel={() => setPipelineModalOpen(false)}
+          onOk={() => submitPipelineFromSession()}
+          okText="创建并启动"
+          confirmLoading={pipelineSubmitting}
+          destroyOnClose
+        >
+          <p className="mb-3 text-sm text-slate-600">
+            将把当前会话中的对话汇总为需求文本，创建一条新的 PipelineRun 并立即启动执行；完成后跳转到流水线工作台。
+          </p>
+          <Form form={pipelineForm} layout="vertical" initialValues={{ targetRepo: 'self', targetBranch: 'main' }}>
+            <Form.Item name="targetRepo" label="目标仓库" rules={[{ required: true, message: '请填写仓库' }]}>
+              <Input placeholder="例如 self 或 owner/repo" />
+            </Form.Item>
+            <Form.Item name="targetBranch" label="目标分支" rules={[{ required: true, message: '请填写分支' }]}>
+              <Input placeholder="例如 main" />
+            </Form.Item>
+          </Form>
+        </Modal>
       </main>
     </div>
   )

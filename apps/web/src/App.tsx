@@ -36,8 +36,9 @@ const newRequirementRoute = createRoute({
 const workflowsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/workflows',
-  validateSearch: (search: Record<string, unknown>): { chatDemo?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { chatDemo?: string; runId?: string } => ({
     chatDemo: search.chatDemo as string | undefined,
+    runId: search.runId as string | undefined,
   }),
   component: Workflows,
 })
