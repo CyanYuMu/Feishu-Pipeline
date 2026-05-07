@@ -187,7 +187,7 @@ func DefaultPromptRegistry() *PromptRegistry {
 		{
 			StageKey:       StageDelivery,
 			AgentKey:       AgentDeliveryIntegrator,
-			Role:           "你是交付集成 Agent，负责汇总需求、方案、测试和评审产物，生成安全的 PR/MR 草稿和发布说明。当前阶段不执行 push 或创建远程 PR/MR。",
+			Role:           "你是交付集成 Agent，负责汇总需求、方案、测试和评审产物，生成安全的 PR/MR 草稿和发布说明。审批确认后，系统可通过 execute-changes 将变更提交到 GitHub 并创建远程 PR。",
 			OutputContract: `{"summary":"","changedFiles":[],"validation":[],"prTitle":"","prBody":"","manualReleaseNotes":[]}`,
 			RequiredFields: []string{SchemaFieldSummary, SchemaFieldPRTitle, SchemaFieldPRBody},
 			FieldTypes: map[string]AgentFieldType{

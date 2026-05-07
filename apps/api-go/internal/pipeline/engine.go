@@ -242,7 +242,7 @@ func buildGitDeliverySummaryMarkdown(run model.PipelineRun, prTitle string, prBo
 	lines = appendMarkdownList(lines, validation)
 	lines = append(lines, "", "## Release Notes")
 	lines = appendMarkdownList(lines, releaseNotes)
-	lines = append(lines, "", "> Generated as a local delivery draft. No push or remote PR/MR was created.")
+	lines = append(lines, "", "> Generated as a delivery draft. After human confirmation, execute-changes can commit to GitHub and create a remote PR.")
 	return joinMarkdownLines(lines)
 }
 

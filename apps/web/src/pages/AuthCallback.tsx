@@ -23,8 +23,21 @@ function postFeishuSSOLogin(code: string): Promise<Response> {
   return p
 }
 
+async function bindFeishu(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/feishu/bind`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ code }),
+  })
+  const payload = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(payload.error || '飞书绑定失败')
+  }
+}
+
 // 调用后端接口绑定 GitHub 账号到当前登录用户
-async function bindGitHub(code: string): Promise<boolean> {
+async function bindGitHub(code: string): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}/auth/github/bind`, {
       method: 'POST',
@@ -32,9 +45,12 @@ async function bindGitHub(code: string): Promise<boolean> {
       credentials: 'include',
       body: JSON.stringify({ code }),
     })
-    return res.ok
-  } catch {
-    return false
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(payload.error || 'GitHub 绑定失败')
+    }
+  } catch (err) {
+    throw err instanceof Error ? err : new Error('GitHub 绑定失败')
   }
 }
 
@@ -49,6 +65,7 @@ export default function AuthCallback() {
       
       // 检查是否是 GitHub OAuth 回调
       const isGitHubBind = sessionStorage.getItem('github_bind_mode') === 'true'
+      const isFeishuBind = sessionStorage.getItem('feishu_bind_mode') === 'true'
       
       if (isGitHubBind) {
         // GitHub 绑定回调
@@ -73,20 +90,48 @@ export default function AuthCallback() {
         
         // 调用后端绑定接口
         try {
-          const success = await bindGitHub(code)
-          if (success) {
-            sessionStorage.removeItem('github_bind_mode')
-            sessionStorage.removeItem('github_auth_state')
-            message.success('GitHub 绑定成功')
-            navigate({ to: '/' })
-          } else {
-            throw new Error('绑定失败')
-          }
-        } catch (e) {
-          console.error('GitHub bind error:', e)
-          message.error('GitHub 绑定失败，请重试')
+          await bindGitHub(code)
           sessionStorage.removeItem('github_bind_mode')
           sessionStorage.removeItem('github_auth_state')
+          message.success('GitHub 绑定成功')
+          navigate({ to: '/' })
+        } catch (e) {
+          console.error('GitHub bind error:', e)
+          message.error(e instanceof Error ? e.message : 'GitHub 绑定失败，请重试')
+          sessionStorage.removeItem('github_bind_mode')
+          sessionStorage.removeItem('github_auth_state')
+          navigate({ to: '/' })
+        }
+        return
+      }
+
+      if (isFeishuBind) {
+        const savedState = sessionStorage.getItem('feishu_auth_state')
+        if (state && savedState && state !== savedState) {
+          message.error('state 验证失败，请重试')
+          sessionStorage.removeItem('feishu_bind_mode')
+          sessionStorage.removeItem('feishu_auth_state')
+          navigate({ to: '/' })
+          return
+        }
+        if (!code) {
+          message.error('未获取到授权码')
+          sessionStorage.removeItem('feishu_bind_mode')
+          sessionStorage.removeItem('feishu_auth_state')
+          navigate({ to: '/' })
+          return
+        }
+        try {
+          await bindFeishu(code)
+          sessionStorage.removeItem('feishu_bind_mode')
+          sessionStorage.removeItem('feishu_auth_state')
+          message.success('飞书绑定成功')
+          navigate({ to: '/' })
+        } catch (e) {
+          console.error('Feishu bind error:', e)
+          message.error(e instanceof Error ? e.message : '飞书绑定失败，请重试')
+          sessionStorage.removeItem('feishu_bind_mode')
+          sessionStorage.removeItem('feishu_auth_state')
           navigate({ to: '/' })
         }
         return

@@ -163,6 +163,18 @@ func (r *Repository) FindUserByID(ctx context.Context, userID string) (model.Use
 	return user, err
 }
 
+func (r *Repository) FindUserByFeishuOpenID(ctx context.Context, openID string) (model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).First(&user, "feishu_open_id = ?", openID).Error
+	return user, err
+}
+
+func (r *Repository) FindUserByGitHubID(ctx context.Context, githubID string) (model.User, error) {
+	var user model.User
+	err := r.db.WithContext(ctx).First(&user, "git_hub_id = ?", githubID).Error
+	return user, err
+}
+
 func (r *Repository) FindLatestUserByRole(ctx context.Context, role model.Role) (model.User, error) {
 	var user model.User
 	err := r.db.WithContext(ctx).
@@ -531,25 +543,60 @@ func (r *Repository) UpdateProject(ctx context.Context, id string, updates map[s
 }
 
 func (r *Repository) seedPipelineTemplatesTx(ctx context.Context, tx *gorm.DB) error {
-	var count int64
-	if err := tx.WithContext(ctx).Model(&model.PipelineTemplate{}).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-
 	now := time.Now().UTC()
-	template := model.PipelineTemplate{
-		ID:             pipeline.DefaultTemplateID,
-		Name:           "Feature Delivery",
-		Description:    "默认新功能研发交付流水线模板",
-		Version:        "v1",
-		DefinitionJSON: pipeline.DefaultTemplateDefinitionJSON(),
-		IsActive:       true,
-		BaseModel:      model.BaseModel{CreatedAt: now, UpdatedAt: now},
+	templates := []model.PipelineTemplate{
+		{
+			ID:             pipeline.DefaultTemplateID,
+			Name:           "Feature Delivery",
+			Description:    "默认新功能研发交付流水线模板，覆盖需求分析、方案设计、代码生成、测试、评审和交付。",
+			Version:        "v2",
+			DefinitionJSON: pipeline.TemplateDefinitionJSON(pipeline.DefaultTemplateID),
+			IsActive:       true,
+			BaseModel:      model.BaseModel{CreatedAt: now, UpdatedAt: now},
+		},
+		{
+			ID:             pipeline.BugFixTemplateID,
+			Name:           "Bug Fix Delivery",
+			Description:    "缺陷修复流水线模板，强调复现、根因、最小修复和回归测试。",
+			Version:        "v1",
+			DefinitionJSON: pipeline.TemplateDefinitionJSON(pipeline.BugFixTemplateID),
+			IsActive:       true,
+			BaseModel:      model.BaseModel{CreatedAt: now, UpdatedAt: now},
+		},
+		{
+			ID:             pipeline.RefactorTemplateID,
+			Name:           "Refactor Delivery",
+			Description:    "重构流水线模板，强调行为保持、影响范围控制、测试安全和可回滚交付。",
+			Version:        "v1",
+			DefinitionJSON: pipeline.TemplateDefinitionJSON(pipeline.RefactorTemplateID),
+			IsActive:       true,
+			BaseModel:      model.BaseModel{CreatedAt: now, UpdatedAt: now},
+		},
 	}
-	return tx.WithContext(ctx).Create(&template).Error
+	for _, template := range templates {
+		var existing model.PipelineTemplate
+		err := tx.WithContext(ctx).First(&existing, "id = ?", template.ID).Error
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				if err := tx.WithContext(ctx).Create(&template).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		if err := tx.WithContext(ctx).Model(&model.PipelineTemplate{}).Where("id = ?", template.ID).Updates(map[string]any{
+			"name":            template.Name,
+			"description":     template.Description,
+			"version":         template.Version,
+			"definition_json": template.DefinitionJSON,
+			"is_active":       template.IsActive,
+			"updated_at":      now,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ListPipelineTemplates(ctx context.Context) ([]model.PipelineTemplate, error) {

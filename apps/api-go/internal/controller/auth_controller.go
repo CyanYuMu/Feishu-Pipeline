@@ -39,11 +39,15 @@ func NewAuthController(authService *service.AuthService, cookieName string, cook
 // @produce application/json
 func (c *AuthController) GitHubConfig(ctx *gin.Context) {
 	clientID := c.authService.GitHubClientID()
+	redirectURI := c.authService.GitHubRedirectURI()
+	if redirectURI == "" {
+		redirectURI = c.GitHubCallbackURL()
+	}
 	writeSuccess(ctx, http.StatusOK, map[string]interface{}{
-		"enabled":    clientID != "",
-		"clientId":   clientID,
+		"enabled":      clientID != "",
+		"clientId":     clientID,
 		"authorizeUrl": "https://github.com/login/oauth/authorize",
-		"callbackUrl": "/api/auth/github/callback",
+		"callbackUrl":  redirectURI,
 	})
 }
 
@@ -413,6 +417,34 @@ func (c *AuthController) SSOLogin(ctx *gin.Context) {
 
 	c.writeSessionCookie(ctx, session)
 	writeSuccess(ctx, http.StatusOK, authtype.NewLoginResponse(user))
+}
+
+// FeishuBind
+// @tags 认证
+// @summary 为当前用户绑定飞书账号
+// @router /api/auth/feishu/bind [POST]
+// @accept application/json
+// @produce application/json
+func (c *AuthController) FeishuBind(ctx *gin.Context) {
+	var request authtype.FeishuSSOLoginRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	userID := currentUserID(ctx)
+	if userID == "" {
+		writeError(ctx, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
+	user, err := c.authService.BindFeishuToUser(ctx.Request.Context(), userID, request.Code)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+
+	writeSuccess(ctx, http.StatusOK, authtype.NewUserResponse(user))
 }
 
 // Logout

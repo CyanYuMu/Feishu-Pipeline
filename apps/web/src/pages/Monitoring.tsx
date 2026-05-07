@@ -407,10 +407,13 @@ export default function Monitoring() {
       })
       if (res.ok) {
         const result = await res.json()
-        message.success(result.data?.summary || '变更执行完成')
+        const prUrl = result.data?.prmrUrl
+        const commitSha = result.data?.commitSha
+        message.success(prUrl ? `变更已提交并创建 PR：${prUrl}` : commitSha ? `变更已提交：${commitSha}` : result.data?.summary || '变更执行完成')
         setApprovalModalVisible(false)
       } else {
-        message.error('执行变更失败')
+        const result = await res.json().catch(() => ({}))
+        message.error(result.error || '执行变更失败')
       }
     } catch {
       message.error('执行变更失败')

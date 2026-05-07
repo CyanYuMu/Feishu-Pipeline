@@ -11,6 +11,7 @@ import (
 	"feishu-pipeline/apps/api-go/internal/external/feishu"
 	"feishu-pipeline/apps/api-go/internal/job"
 	"feishu-pipeline/apps/api-go/internal/model"
+	"feishu-pipeline/apps/api-go/internal/pipeline"
 	"feishu-pipeline/apps/api-go/internal/repo"
 	"feishu-pipeline/apps/api-go/internal/utils"
 
@@ -225,46 +226,29 @@ func (s *PublishService) HandlePublish(ctx context.Context, payload job.PublishJ
 	// 自动创建对应的研发流水线
 	runID := ""
 	if s.pipelineService != nil {
-		// 获取默认模板
-		templates, err := s.pipelineService.ListPipelineTemplates(ctx)
-		if err == nil && len(templates) > 0 {
-			// 使用第一个激活的模板
-			var defaultTemplate *model.PipelineTemplate
-			for _, t := range templates {
-				if t.IsActive {
-					defaultTemplate = &t
-					break
-				}
-			}
+		requirementText := buildPipelineRequirementText(output.Requirement, output.Tasks, requirementDocURL)
+		if requirementText == "" {
+			requirementText = aggregate.Session.Title
+		}
 
-			if defaultTemplate != nil {
-				// 构建需求描述
-				requirementText := buildPipelineRequirementText(output.Requirement, output.Tasks, requirementDocURL)
-				if requirementText == "" {
-					requirementText = aggregate.Session.Title
-				}
+		detail, err := s.pipelineService.CreatePipelineRun(ctx, CreatePipelineRunInput{
+			TemplateID:      pipeline.DefaultTemplateID,
+			Title:           output.Requirement.Title,
+			RequirementText: requirementText,
+			TargetRepo:      "self",
+			TargetBranch:    "main",
+			CreatedBy:       aggregate.Session.OwnerID,
+			SourceSessionID: aggregate.Session.ID,
+		})
 
-				// 创建流水线
-				detail, err := s.pipelineService.CreatePipelineRun(ctx, CreatePipelineRunInput{
-					TemplateID:      defaultTemplate.ID,
-					Title:           output.Requirement.Title,
-					RequirementText: requirementText,
-					TargetRepo:      "self", // 会话发布默认当前仓库
-					TargetBranch:    "main",
-					CreatedBy:       aggregate.Session.OwnerID, // 使用会话创建者
-					SourceSessionID: aggregate.Session.ID,
-				})
-
-				if err != nil {
-					log.Printf("自动创建流水线失败: session_id=%s err=%v", payload.SessionID, err)
-				} else {
-					runID = detail.Run.ID
-					if _, startErr := s.pipelineService.StartPipelineRun(ctx, detail.Run.ID); startErr != nil {
-						log.Printf("自动启动流水线失败: session_id=%s run_id=%s err=%v", payload.SessionID, detail.Run.ID, startErr)
-					} else {
-						log.Printf("自动创建并启动流水线成功: session_id=%s run_id=%s", payload.SessionID, detail.Run.ID)
-					}
-				}
+		if err != nil {
+			log.Printf("自动创建流水线失败: session_id=%s err=%v", payload.SessionID, err)
+		} else {
+			runID = detail.Run.ID
+			if _, startErr := s.pipelineService.StartPipelineRun(ctx, detail.Run.ID); startErr != nil {
+				log.Printf("自动启动流水线失败: session_id=%s run_id=%s err=%v", payload.SessionID, detail.Run.ID, startErr)
+			} else {
+				log.Printf("自动创建并启动流水线成功: session_id=%s run_id=%s", payload.SessionID, detail.Run.ID)
 			}
 		}
 	}

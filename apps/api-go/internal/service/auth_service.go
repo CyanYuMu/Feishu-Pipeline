@@ -74,9 +74,9 @@ func stringValue(ptr *string, defaultValue string) string {
 }
 
 type AuthService struct {
-	repository    *repo.Repository
-	feishuClient  *feishu.Client
-	sessionTTL    time.Duration
+	repository         *repo.Repository
+	feishuClient       *feishu.Client
+	sessionTTL         time.Duration
 	githubClientID     string
 	githubClientSecret string
 	githubRedirectURI  string
@@ -92,12 +92,12 @@ func NewAuthService(repository *repo.Repository, feishuClient *feishu.Client, se
 
 func NewAuthServiceWithGitHub(repository *repo.Repository, feishuClient *feishu.Client, sessionTTL time.Duration, githubClientID, githubClientSecret, githubRedirectURI string) *AuthService {
 	return &AuthService{
-		repository:        repository,
-		feishuClient:      feishuClient,
-		sessionTTL:        sessionTTL,
-		githubClientID:    githubClientID,
+		repository:         repository,
+		feishuClient:       feishuClient,
+		sessionTTL:         sessionTTL,
+		githubClientID:     githubClientID,
 		githubClientSecret: githubClientSecret,
-		githubRedirectURI: githubRedirectURI,
+		githubRedirectURI:  githubRedirectURI,
 	}
 }
 
@@ -115,6 +115,10 @@ func (s *AuthService) FeishuOAuthScope() string {
 
 func (s *AuthService) GitHubClientID() string {
 	return s.githubClientID
+}
+
+func (s *AuthService) GitHubRedirectURI() string {
+	return s.githubRedirectURI
 }
 
 // 直接通过 GitHub 用户信息创建会话（TS后端验证后调用）
@@ -180,19 +184,34 @@ func (s *AuthService) LoginByGitHubCode(ctx context.Context, code string) (model
 		return model.User{}, model.LoginSession{}, err
 	}
 
-	// 3. 创建/更新用户
+	// 3. 创建/更新用户。若该 GitHub 账号已经绑定到飞书用户，继续使用同一用户记录。
+	githubID := strconv.FormatInt(profile.ID, 10)
 	user := model.User{
-		ID:        "gh_" + strconv.FormatInt(profile.ID, 10),
-		Name:      stringValue(profile.Name, profile.Login),
-		Email:     stringValue(profile.Email, ""),
-		AvatarURL: profile.AvatarURL,
-		Role:      model.RoleOther,
+		ID:                "gh_" + githubID,
+		Name:              stringValue(profile.Name, profile.Login),
+		Email:             stringValue(profile.Email, ""),
+		AvatarURL:         profile.AvatarURL,
+		Role:              model.RoleOther,
+		GitHubID:          githubID,
+		GitHubLogin:       profile.Login,
+		GitHubAvatar:      profile.AvatarURL,
+		GitHubAccessToken: tokenRes.AccessToken,
 	}
 	if user.Email == "" {
 		user.Departments = []string{"其他"}
 	} else {
 		// 尝试从邮箱推断部门
 		user.Departments = inferDepartmentsFromEmail(user.Email)
+	}
+
+	if existing, err := s.repository.FindUserByGitHubID(ctx, githubID); err == nil {
+		user = mergeGitHubLoginUser(existing, user)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.User{}, model.LoginSession{}, err
+	} else if existing, err := s.repository.FindUserByID(ctx, user.ID); err == nil {
+		user = mergeGitHubLoginUser(existing, user)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.User{}, model.LoginSession{}, err
 	}
 
 	// 如果用户已存在，保留原角色
@@ -240,6 +259,13 @@ func (s *AuthService) BindGitHubToUser(ctx context.Context, userID string, code 
 		return model.User{}, err
 	}
 
+	githubID := strconv.FormatInt(profile.ID, 10)
+	if existing, findErr := s.repository.FindUserByGitHubID(ctx, githubID); findErr == nil && existing.ID != userID {
+		return model.User{}, errors.New("该 GitHub 账号已绑定到其他用户")
+	} else if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return model.User{}, findErr
+	}
+
 	// 3. 查找当前用户
 	user, err := s.repository.FindUserByID(ctx, userID)
 	if err != nil {
@@ -247,7 +273,7 @@ func (s *AuthService) BindGitHubToUser(ctx context.Context, userID string, code 
 	}
 
 	// 4. 绑定 GitHub 信息到当前用户
-	user.GitHubID = strconv.FormatInt(profile.ID, 10)
+	user.GitHubID = githubID
 	user.GitHubLogin = profile.Login
 	user.GitHubAvatar = profile.AvatarURL
 	user.GitHubAccessToken = tokenRes.AccessToken // 保存 access_token 用于后续 API 调用
@@ -257,6 +283,72 @@ func (s *AuthService) BindGitHubToUser(ctx context.Context, userID string, code 
 		return model.User{}, err
 	}
 
+	return user, nil
+}
+
+// BindFeishuToUser 为当前已登录用户绑定飞书账号，不切换当前登录主体。
+func (s *AuthService) BindFeishuToUser(ctx context.Context, userID string, code string) (model.User, error) {
+	token, err := s.feishuClient.ExchangeCodeForUserToken(ctx, code)
+	if err != nil {
+		return model.User{}, err
+	}
+
+	profile, err := s.feishuClient.GetUserInfo(ctx, token.AccessToken)
+	if err != nil {
+		return model.User{}, err
+	}
+	if profile.OpenID == "" {
+		return model.User{}, errors.New("feishu open_id is empty")
+	}
+
+	if existing, findErr := s.repository.FindUserByFeishuOpenID(ctx, profile.OpenID); findErr == nil && existing.ID != userID {
+		return model.User{}, errors.New("该飞书账号已绑定到其他用户")
+	} else if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return model.User{}, findErr
+	}
+
+	user, err := s.repository.FindUserByID(ctx, userID)
+	if err != nil {
+		return model.User{}, err
+	}
+
+	user.FeishuOpenID = profile.OpenID
+	if user.Name == "" || strings.HasPrefix(user.ID, "gh_") {
+		user.Name = utils.Coalesce(profile.Name, profile.EnName, user.Name, "飞书用户")
+	}
+	if user.Email == "" {
+		user.Email = utils.Coalesce(profile.EnterpriseEmail, profile.Email)
+	}
+	if user.AvatarURL == "" {
+		user.AvatarURL = profile.AvatarURL
+	}
+	if departments, classifyErr := s.resolveDepartments(ctx, token.AccessToken, profile); classifyErr == nil {
+		user.Departments = departments
+		if user.Role != model.RoleAdmin {
+			user.Role = classifyRoleByDepartments(departments)
+		}
+	}
+
+	now := time.Now().UTC()
+	credential := model.FeishuCredential{
+		ID:                    "cred_" + user.ID,
+		UserID:                user.ID,
+		OpenID:                profile.OpenID,
+		UnionID:               profile.UnionID,
+		FeishuUserID:          profile.FeishuUserID,
+		AccessToken:           token.AccessToken,
+		RefreshToken:          token.RefreshToken,
+		AccessTokenExpiresAt:  token.AccessTokenExpiresAt,
+		RefreshTokenExpiresAt: token.RefreshTokenExpiresAt,
+		LastLoginAt:           now,
+		LastRefreshAt:         now,
+	}
+	if err := s.repository.UpsertUser(ctx, &user); err != nil {
+		return model.User{}, err
+	}
+	if err := s.repository.SaveCredential(ctx, &credential); err != nil {
+		return model.User{}, err
+	}
 	return user, nil
 }
 
@@ -286,11 +378,11 @@ type githubTokenResponse struct {
 }
 
 type GitHubRepo struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	FullName string `json:"full_name"`
-	Private  bool   `json:"private"`
-	HTMLURL  string `json:"html_url"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	FullName    string `json:"full_name"`
+	Private     bool   `json:"private"`
+	HTMLURL     string `json:"html_url"`
 	Description string `json:"description"`
 }
 
@@ -692,7 +784,7 @@ func (s *AuthService) createDefaultBranch(ctx context.Context, token string, own
 
 func (s *AuthService) exchangeGitHubCode(code string) (*githubTokenResponse, error) {
 	log.Printf("[GitHub OAuth] Exchanging code: client_id=%s, redirect_uri=%s", s.githubClientID, s.githubRedirectURI)
-	
+
 	data := url.Values{}
 	data.Set("client_id", s.githubClientID)
 	data.Set("client_secret", s.githubClientSecret)
@@ -714,7 +806,7 @@ func (s *AuthService) exchangeGitHubCode(code string) (*githubTokenResponse, err
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	log.Printf("[GitHub OAuth] Response status: %d", resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
@@ -722,7 +814,7 @@ func (s *AuthService) exchangeGitHubCode(code string) (*githubTokenResponse, err
 		log.Printf("[GitHub OAuth] Failed to read response body: %v", err)
 		return nil, err
 	}
-	
+
 	log.Printf("[GitHub OAuth] Response body: %s", string(body))
 
 	var result githubTokenResponse
@@ -791,6 +883,49 @@ func inferDepartmentsFromEmail(email string) []string {
 	}
 }
 
+func mergeGitHubLoginUser(existing model.User, githubUser model.User) model.User {
+	existing.GitHubID = githubUser.GitHubID
+	existing.GitHubLogin = githubUser.GitHubLogin
+	existing.GitHubAvatar = githubUser.GitHubAvatar
+	existing.GitHubAccessToken = githubUser.GitHubAccessToken
+	if existing.Name == "" || strings.HasPrefix(existing.ID, "gh_") {
+		existing.Name = githubUser.Name
+	}
+	if existing.Email == "" {
+		existing.Email = githubUser.Email
+	}
+	if existing.AvatarURL == "" || strings.HasPrefix(existing.ID, "gh_") {
+		existing.AvatarURL = githubUser.AvatarURL
+	}
+	if len(existing.Departments) == 0 {
+		existing.Departments = githubUser.Departments
+	}
+	if existing.Role == "" {
+		existing.Role = githubUser.Role
+	}
+	return existing
+}
+
+func mergeFeishuLoginUser(existing model.User, feishuUser model.User) model.User {
+	existing.FeishuOpenID = feishuUser.FeishuOpenID
+	if existing.Name == "" || strings.HasPrefix(existing.ID, "fs_") {
+		existing.Name = feishuUser.Name
+	}
+	if existing.Email == "" {
+		existing.Email = feishuUser.Email
+	}
+	if existing.AvatarURL == "" || strings.HasPrefix(existing.ID, "fs_") {
+		existing.AvatarURL = feishuUser.AvatarURL
+	}
+	if len(feishuUser.Departments) > 0 {
+		existing.Departments = feishuUser.Departments
+	}
+	if existing.Role != model.RoleAdmin {
+		existing.Role = feishuUser.Role
+	}
+	return existing
+}
+
 func (s *AuthService) LoginByCode(ctx context.Context, code string) (model.User, model.LoginSession, error) {
 	token, err := s.feishuClient.ExchangeCodeForUserToken(ctx, code)
 	if err != nil {
@@ -809,13 +944,21 @@ func (s *AuthService) LoginByCode(ctx context.Context, code string) (model.User,
 		user.Role = classifyRoleByDepartments(departments)
 	}
 
+	if existing, err := s.repository.FindUserByFeishuOpenID(ctx, profile.OpenID); err == nil {
+		user = mergeFeishuLoginUser(existing, user)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.User{}, model.LoginSession{}, err
+	} else if existing, err := s.repository.FindUserByID(ctx, user.ID); err == nil {
+		user = mergeFeishuLoginUser(existing, user)
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.User{}, model.LoginSession{}, err
+	}
+
 	if existing, err := s.repository.FindUserByID(ctx, user.ID); err == nil {
 		// 管理员角色由后台显式维护，不被登录时的部门同步覆盖。
 		if existing.Role == model.RoleAdmin {
 			user.Role = model.RoleAdmin
 		}
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return model.User{}, model.LoginSession{}, err
 	}
 
 	now := time.Now().UTC()
@@ -1102,16 +1245,16 @@ type FeishuCardCallbackRequest struct {
 			Intent string `json:"intent"` // approve / reject
 		} `json:"input"`
 		Message struct {
-			MessageID string `json:"message_id"`
-			RootID    string `json:"root_id"`
-			ParentID  string `json:"parent_id"`
+			MessageID  string `json:"message_id"`
+			RootID     string `json:"root_id"`
+			ParentID   string `json:"parent_id"`
 			CreateTime string `json:"create_time"`
-			ChatID    string `json:"chat_id"`
-			Sender    struct {
+			ChatID     string `json:"chat_id"`
+			Sender     struct {
 				SenderID struct {
-					OpenID   string `json:"open_id"`
-					UserID   string `json:"user_id"`
-					UnionID  string `json:"union_id"`
+					OpenID  string `json:"open_id"`
+					UserID  string `json:"user_id"`
+					UnionID string `json:"union_id"`
 				} `json:"sender_id"`
 			} `json:"sender"`
 		} `json:"message"`

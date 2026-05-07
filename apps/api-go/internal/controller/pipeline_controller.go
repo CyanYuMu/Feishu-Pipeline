@@ -311,7 +311,7 @@ func (c *PipelineController) ListAgentRuns(ctx *gin.Context) {
 // ListGitDeliveries
 // @tags Pipeline
 // @summary 获取流水线交付记录列表
-// @description 返回指定 PipelineRun 的 GitDelivery 交付草稿列表。当前实现只创建本地可审查的交付记录和 PR/MR 草稿，不执行 git push，也不创建远程 PR/MR。
+// @description 返回指定 PipelineRun 的 GitDelivery 交付记录列表。execute-changes 执行后会写入 GitHub commit SHA 与 PR/MR URL。
 // @router /api/pipeline-runs/{id}/deliveries [GET]
 // @produce application/json
 // @param id path string true "流水线运行ID"
@@ -509,6 +509,8 @@ func (c *PipelineController) ExecuteChanges(ctx *gin.Context) {
 		AppliedFiles: result.AppliedFiles,
 		FailedFiles:  result.FailedFiles,
 		Summary:      result.Summary,
+		CommitSHA:    result.CommitSHA,
+		PRMRURL:      result.PRMRURL,
 	})
 }
 

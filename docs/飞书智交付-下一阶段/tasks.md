@@ -489,11 +489,13 @@ S3-6 Swagger、测试与演示验收
 - 说明：多Agent协作功能已完整实现，代码生成和代码评审阶段已默认启用多Agent模式，可通过模板配置灵活调整Agent数量、角色和合并策略。
 
 ### 10.2 S4-2：自动回归能力
-- [ ] 设计评审问题自动修复流程
-- [ ] 实现 Reject 原因的自动解析与理解
-- [ ] 支持 Agent 基于评审意见自动修复代码
-- [ ] 增加最大重试次数控制
-- [ ] 修复完成后自动重新提交评审
+- [x] 设计评审问题自动修复流程
+- [x] 实现 Reject 原因的自动解析与理解
+- [x] 支持 Agent 基于评审意见自动修复代码
+- [x] 修复完成后自动重新提交评审
+- [x] Workflows 展示回退重做原因，便于演示 Reject + 重做链路
+- [ ] 增加可配置最大重试次数控制
+- 说明：`RejectCheckpoint` 已将上一可执行阶段重置为 queued、写入 `rejectReason`、重置后续阶段和 superseded 产物，并重新投递后台队列；本轮补齐前端 Reject 原因传递和 Workflows 回退重做原因展示。最大重试次数仍待配置化。
 
 ### 10.3 S4-3：可观测性面板增强
 - [x] 实现 Pipeline 成功/失败率统计
@@ -502,6 +504,27 @@ S3-6 Swagger、测试与演示验收
 - [x] 开发 Agent 推理过程详情展示面板
 - [x] 支持日志与错误的搜索与过滤
 - 说明：已实现完整的可观测性统计功能，包含4个后端统计API（overview/trends/stages/agents）和前端统计面板，支持时间范围筛选（今日/近7天/近30天），展示全局统计概览（总流水线数、成功率、平均运行时长、总Token消耗）、运行趋势、阶段性能分析（各阶段成功率、平均耗时）、Agent运行统计（调用次数、Token消耗排行）等多维度数据。
+
+### 10.8 S4-8：代码 Diff 对话与 Workflows 执行可视化
+- [x] 修复 Diff 对话入口仅在 `waiting_approval + code_review checkpoint` 可见的问题
+- [x] Workflows 顶部操作区、右侧上下文和悬浮按钮均可打开代码 Diff 对话
+- [x] 判断入口时覆盖 `code_diff` 产物、代码生成/评审 AgentRun、代码阶段上下文
+- [x] Diff 对话优先读取 `/api/pipeline-runs/:id/code-diff` 的结构化变更产物
+- [x] Diff 对话按文件展示摘要、变更原因和行级 diff，并保留 AgentRun 输入/输出 diff 兜底
+- [x] Diff 对话嵌入 Workflows 时复用父页面 timeline，不再每次打开都请求慢接口 `/api/pipeline-runs/:id/current`
+- [x] `code-diff` 请求增加短期前端缓存，减少重复打开面板时的等待
+- [x] Diff 行级展示改为浅色背景、行号、文件按钮截断，提升可读性
+- [x] Workflows 新增横向执行轨道，展示阶段顺序、当前阶段、成功、运行中、待审批和失败状态
+- [x] 阶段轨道和阶段明细补充每一步职责说明、attempt 与起止时间
+- [ ] 将结构化 diff 进一步升级为可折叠逐文件 Split View，并支持对单文件发起修改意见
+- 说明：本阶段先解决“前端看不到对话式 diff”和“流水线执行过程不直观”两个演示断点，确保代码生成后即可发现 Diff 对话能力，审批点到达后同一面板可直接 Resolve / Reject。
+
+### 10.9 S4-9：GitHub 绑定体验修复
+- [x] 后端开放 `/api/auth/github/config`，返回当前 GitHub OAuth 是否启用、clientId 与 callbackUrl
+- [x] 前端绑定 GitHub 时不再硬编码 clientId，统一读取后端配置
+- [x] 未配置 GitHub OAuth 时给出明确错误，不再直接跳转后失败
+- [x] GitHub 绑定回调显示后端返回的具体错误，便于排查 redirect_uri / client_secret / 网络问题
+- [ ] 使用真实 GitHub OAuth App 完成绑定、仓库列表和分支列表 smoke
 
 ### 10.7 S4-7：项目-流水线联动
 - [x] 修复AI创建项目后前端看不到流水线的问题
@@ -517,18 +540,23 @@ S3-6 Swagger、测试与演示验收
 - [ ] 支持索引的增量更新
 
 ### 10.5 S4-5：Pipeline 模板系统
-- [ ] 设计模板数据结构与存储
-- [ ] 实现 Bug 修复流程模板
-- [ ] 实现新功能开发流程模板
-- [ ] 实现重构流程模板
+- [x] 设计模板数据结构与存储
+- [x] 实现 Bug 修复流程模板
+- [x] 实现新功能开发流程模板
+- [x] 实现重构流程模板
 - [ ] 支持模板的自定义编辑与保存
-- [ ] 开发模板管理 UI
+- [x] 开发模板选择 UI
+- 说明：已在后端种子中内置 `feature-delivery`、`bug-fix`、`refactor` 三类模板，并在 Workflows 新建 Pipeline 弹窗中支持选择模板；三类模板当前复用稳定的 8 阶段研发交付骨架，通过模板 definition 携带场景、默认策略和使用说明。模板在线编辑留到后续阶段。
 
 ### 10.6 S4-6：Git 集成增强
-- [ ] 实现代码变更的自动执行
-- [ ] 支持 MR/PR 创建的自动触发
-- [ ] 增加 MR/PR 状态的同步与展示
+- [x] 实现代码变更的自动执行
+- [x] 支持 MR/PR 创建的自动触发
+- [x] `execute-changes` 优先使用当前用户绑定的 GitHub token，无需前端手动传 token
+- [x] GitHub Contents API 写入文件时完成远程 commit/push，并记录 commit SHA
+- [x] PR 创建成功后写入 GitDelivery 的 `prmrUrl`，失败时返回 `__pull_request__` 失败项
+- [x] 增加 MR/PR 状态的同步与展示基础字段（commitSha / prmrUrl）
 - [ ] 实现代码合并后的状态回调
+- 说明：当前已打通“审批通过 -> execute-changes -> GitHub 工作分支 commit/push -> 创建 PR -> GitDelivery 记录 commit/PR”的赛题交付链路；合并后的 webhook 回调仍待开发。
 
 ---
 

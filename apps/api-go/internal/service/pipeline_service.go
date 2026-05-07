@@ -869,6 +869,8 @@ type ExecuteChangesResult struct {
 	AppliedFiles []string         `json:"appliedFiles"`
 	FailedFiles  []map[string]any `json:"failedFiles"`
 	Summary      string           `json:"summary"`
+	CommitSHA    string           `json:"commitSha,omitempty"`
+	PRMRURL      string           `json:"prmrUrl,omitempty"`
 }
 
 // ExecuteChanges 审批通过后执行变更计划
@@ -880,6 +882,16 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 
 	if run.Status != model.PipelineRunCompleted {
 		return nil, fmt.Errorf("只能在完成状态下执行变更，当前状态: %s", run.Status)
+	}
+	token := strings.TrimSpace(params.Token)
+	if token == "" && params.CommitterID != "" {
+		user, userErr := s.repository.FindUserByID(ctx, params.CommitterID)
+		if userErr == nil {
+			token = user.GitHubAccessToken
+		}
+	}
+	if token == "" {
+		return nil, fmt.Errorf("未找到 GitHub 访问令牌，请先绑定 GitHub 账号或提供 token")
 	}
 
 	// 查找 code_diff 类型的 artifact
@@ -921,7 +933,7 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 		RunID:       runID,
 		ChangeSet:   execChangeSet,
 		CommitterID: params.CommitterID,
-		Token:       params.Token,
+		Token:       token,
 	}
 	result, err := pipeline.ExecuteChanges(ctx, gh, execParams, run)
 	if err != nil {
@@ -937,6 +949,7 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 		Repo:             run.TargetRepo,
 		BaseBranch:       run.TargetBranch,
 		HeadBranch:       run.WorkBranch,
+		CommitSHA:        result.CommitSHA,
 		ChangedFilesJSON: string(changedFilesJSON),
 		ValidationJSON:   string(changedFilesJSON),
 		SummaryMarkdown:  result.Summary,
@@ -947,22 +960,31 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 		return nil, err
 	}
 
-	// 创建 Pull Request
-	if params.Token != "" {
-		gh := external.NewGitHubService()
-		owner, repo, ok := external.ParseRepoPath(run.TargetRepo)
-		if ok {
-			_, _, prErr := gh.CreatePullRequest(
-				ctx,
-				params.Token,
-				owner, repo,
-				run.WorkBranch,
-				run.TargetBranch,
-				run.Title,
-				result.Summary,
-			)
-			if prErr != nil {
-				// PR 创建失败不影响执行结果
+	prURL := ""
+	gh = external.NewGitHubService()
+	owner, repo, ok := external.ParseRepoPath(run.TargetRepo)
+	if ok && len(result.AppliedFiles) > 0 {
+		_, createdPRURL, prErr := gh.CreatePullRequest(
+			ctx,
+			token,
+			owner, repo,
+			run.WorkBranch,
+			run.TargetBranch,
+			run.Title,
+			result.Summary,
+		)
+		if prErr != nil {
+			result.FailedFiles = append(result.FailedFiles, map[string]any{
+				"filePath": "__pull_request__",
+				"error":    prErr.Error(),
+			})
+			if err := s.repository.UpdateGitDeliveryStatus(ctx, delivery.ID, model.GitDeliveryReady, "", result.CommitSHA); err != nil {
+				return nil, err
+			}
+		} else {
+			prURL = createdPRURL
+			if err := s.repository.UpdateGitDeliveryStatus(ctx, delivery.ID, model.GitDeliveryCompleted, prURL, result.CommitSHA); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -971,5 +993,7 @@ func (s *PipelineService) ExecuteChanges(ctx context.Context, runID string, para
 		AppliedFiles: result.AppliedFiles,
 		FailedFiles:  result.FailedFiles,
 		Summary:      result.Summary,
+		CommitSHA:    result.CommitSHA,
+		PRMRURL:      prURL,
 	}, nil
 }
