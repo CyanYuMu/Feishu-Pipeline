@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useRouterState } from '@tanstack/react-router'
+import { useNavigate, useRouterState, useSearch } from '@tanstack/react-router'
 import { Alert, Button, Card, Checkbox, Empty, Form, Input, Modal, Progress, Select, Skeleton, Space, Tag, Tooltip, message, Drawer, Spin } from 'antd'
 import { PlusOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined, SyncOutlined, FileTextOutlined, CodeOutlined } from '@ant-design/icons'
 import Sidebar from '../components/Sidebar'
@@ -57,6 +57,7 @@ function useWorkflowChatDemoFlag(): boolean {
 
 export default function Workflows() {
   const navigate = useNavigate()
+  const { runId: runIdFromSearch } = useSearch({ from: '/workflows' })
   const workflowChatDemo = useWorkflowChatDemoFlag()
 
   const [runs, setRuns] = useState<PipelineRun[]>([])
@@ -111,8 +112,20 @@ export default function Workflows() {
     try {
       const items = await fetchPipelineRuns()
       setRuns(items)
+<<<<<<< HEAD
       const queryRunId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('runId')?.trim() : ''
       const firstId = queryRunId && items.some(item => item.id === queryRunId) ? queryRunId : items[0]?.id
+=======
+      const fromRouter = runIdFromSearch?.trim() || ''
+      const fromWindow =
+        typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('runId')?.trim() || '' : ''
+      const prefer = fromRouter || fromWindow
+      if (prefer && prefer !== 'undefined' && prefer !== 'null') {
+        setSelectedRunId(prefer)
+        return
+      }
+      const firstId = items[0]?.id
+>>>>>>> afa286698b5abaf48b72d3c492bc7b0ab40399ab
       if (firstId && firstId !== 'undefined') {
         setSelectedRunId(firstId)
       }
@@ -164,6 +177,13 @@ export default function Workflows() {
   useEffect(() => {
     void loadRuns()
   }, [])
+
+  useEffect(() => {
+    const id = runIdFromSearch?.trim()
+    if (id && id !== 'undefined' && id !== 'null') {
+      setSelectedRunId(id)
+    }
+  }, [runIdFromSearch])
 
   useEffect(() => {
     void loadTimeline(selectedRunId)

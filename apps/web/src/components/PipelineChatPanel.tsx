@@ -221,6 +221,8 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
   const [sending, setSending] = useState(false)
   const [deciding, setDeciding] = useState<'approve' | 'reject' | null>(null)
   const [diffExpanded, setDiffExpanded] = useState(true)
+  const [codeDiff, setCodeDiff] = useState<CodeDiffResponse | null>(null)
+  const [codeDiffLoading, setCodeDiffLoading] = useState(false)
   const messagesRef = useRef<HTMLDivElement | null>(null)
 
   const runId = (runIdProp && runIdProp.trim()) || timelineProp?.run.id || extractRunId(location.pathname, location.searchStr)
@@ -266,6 +268,8 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
 
   useEffect(() => {
     if (isDemoMode) {
+      setCodeDiff(null)
+      setCodeDiffLoading(false)
       setCurrent({
         run: {
           id: 'run_demo',
@@ -335,6 +339,7 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
           if (!cancelled) {
             setCurrent(null)
             setAgentRuns([])
+            setCodeDiff(null)
           }
           return
         }
@@ -449,6 +454,43 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
     }
   }
 
+  const renderCodeDiffBody = () => {
+    if (codeDiffLoading) {
+      return (
+        <div className="flex items-center gap-2 text-slate-500">
+          <Spin size="small" />
+          同步流水线 diff...
+        </div>
+      )
+    }
+    if (hasApiDiff) {
+      return (
+        <div className="space-y-2">
+          {codeDiff?.summary?.trim() ? (
+            <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-[11px] leading-relaxed text-slate-600">
+              {codeDiff.summary}
+            </pre>
+          ) : null}
+          {changeSet.length > 0
+            ? changeSet.map((item, i) => (
+                <div key={`${item.filePath || 'f'}_${i}`} className="space-y-1">
+                  <div className="text-[11px] font-medium text-slate-600">
+                    {item.filePath || `变更 ${i + 1}`}
+                    {item.changeType ? <span className="ml-2 font-normal text-slate-400">[{item.changeType}]</span> : null}
+                  </div>
+                  {renderGitPatchText(item.proposedDiff || '')}
+                </div>
+              ))
+            : null}
+          {codeDiff?.updatedAt ? (
+            <div className="text-[10px] text-slate-400">更新于 {new Date(codeDiff.updatedAt).toLocaleString('zh-CN')}</div>
+          ) : null}
+        </div>
+      )
+    }
+    return renderUnifiedDiff(diff.before || '', diff.after || '')
+  }
+
   return (
     <div className={`fixed right-0 top-0 z-40 h-screen border-l border-slate-200 bg-white shadow-xl transition-all duration-200 ${collapsed ? 'w-12' : 'w-[640px]'}`}>
       <div className="flex h-full flex-col">
@@ -539,12 +581,12 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
                           className="flex w-full items-center justify-between text-left text-[11px] font-medium text-slate-600"
                           onClick={() => setDiffExpanded(prev => !prev)}
                         >
-                          <span>代码 diff（当前版本）</span>
+                          <span>{hasApiDiff ? '代码 diff（流水线 /code-diff）' : '代码 diff（Agent 输入/输出对比）'}</span>
                           {diffExpanded ? <UpOutlined /> : <DownOutlined />}
                         </button>
                         {diffExpanded ? (
                           <div className="space-y-2">
-                            {renderUnifiedDiff(diff.before || '', diff.after || '')}
+                            {renderCodeDiffBody()}
                           </div>
                         ) : null}
                       </div>
