@@ -260,6 +260,52 @@ func TestApproveCheckpointRejectsDuplicateDecision(t *testing.T) {
 	}
 }
 
+func TestGetCheckpointApprovalDetailSelectsLatestRelevantArtifact(t *testing.T) {
+	repository := newPipelineTestRepository(t)
+	service := NewPipelineService(repository, nil)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	run := model.PipelineRun{ID: "run_test_approval_detail", TemplateID: pipeline.DefaultTemplateID, Title: "Approval detail", RequirementText: "需要展示审批上下文", TargetRepo: "self", TargetBranch: "main", WorkBranch: "devflow/approval-detail", Status: model.PipelineRunWaitingApproval, CurrentStageKey: pipeline.StageCheckpointReview, CreatedBy: "tester", BaseModel: model.BaseModel{CreatedAt: now, UpdatedAt: now}}
+	if err := repository.CreatePipelineRun(ctx, &run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	stage := model.StageRun{ID: "stage_approval_detail_checkpoint", PipelineRunID: run.ID, StageKey: pipeline.StageCheckpointReview, StageType: model.StageTypeCheckpoint, Status: model.StageRunWaitingApproval, Attempt: 1, BaseModel: model.BaseModel{CreatedAt: now, UpdatedAt: now}}
+	if err := repository.CreateStageRuns(ctx, []model.StageRun{stage}); err != nil {
+		t.Fatalf("create stage: %v", err)
+	}
+	checkpoint := model.Checkpoint{ID: "cp_approval_detail", PipelineRunID: run.ID, StageRunID: stage.ID, CheckpointType: model.CheckpointCodeReview, Status: model.CheckpointPending, BaseModel: model.BaseModel{CreatedAt: now, UpdatedAt: now}}
+	if err := repository.CreateCheckpoint(ctx, &checkpoint); err != nil {
+		t.Fatalf("create checkpoint: %v", err)
+	}
+	supersededReview := model.Artifact{ID: "artifact_review_old", PipelineRunID: run.ID, StageRunID: "stage_review_old", ArtifactType: model.ArtifactReviewReport, Title: "旧评审报告", ContentJSON: `{"summary":"old"}`, MetaJSON: `{"superseded":true}`, BaseModel: model.BaseModel{CreatedAt: now, UpdatedAt: now}}
+	codeDiff := model.Artifact{ID: "artifact_code_diff", PipelineRunID: run.ID, StageRunID: "stage_codegen", ArtifactType: model.ArtifactCodeDiff, Title: "代码变更计划", ContentJSON: `{"summary":"diff"}`, MetaJSON: `{}`, BaseModel: model.BaseModel{CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second)}}
+	review := model.Artifact{ID: "artifact_review_new", PipelineRunID: run.ID, StageRunID: "stage_review", ArtifactType: model.ArtifactReviewReport, Title: "AI Review 报告", ContentJSON: `{"summary":"review"}`, MetaJSON: `{}`, BaseModel: model.BaseModel{CreatedAt: now.Add(2 * time.Second), UpdatedAt: now.Add(2 * time.Second)}}
+	for _, artifact := range []model.Artifact{supersededReview, codeDiff, review} {
+		item := artifact
+		if err := repository.CreateArtifact(ctx, &item); err != nil {
+			t.Fatalf("create artifact %s: %v", artifact.ID, err)
+		}
+	}
+
+	detail, err := service.GetCheckpointApprovalDetail(ctx, checkpoint.ID)
+	if err != nil {
+		t.Fatalf("get approval detail: %v", err)
+	}
+	if !detail.CanDecide {
+		t.Fatalf("expected checkpoint to be decidable")
+	}
+	if detail.ApprovalArtifact == nil || detail.ApprovalArtifact.ID != review.ID {
+		t.Fatalf("expected latest review artifact, got %#v", detail.ApprovalArtifact)
+	}
+	if _, ok := detail.LatestArtifacts[model.ArtifactReviewReport]; !ok {
+		t.Fatalf("expected latest artifacts to include review report")
+	}
+	if len(detail.RecentArtifacts) != 2 {
+		t.Fatalf("expected 2 non-superseded recent artifacts, got %d", len(detail.RecentArtifacts))
+	}
+}
+
 func TestRejectCheckpointResetsPreviousStage(t *testing.T) {
 	repository := newPipelineTestRepository(t)
 	service := NewPipelineService(repository, nil)

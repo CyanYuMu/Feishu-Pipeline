@@ -10,9 +10,11 @@ import (
 
 const (
 	AgentRequirementAnalyst = "requirement_analyst"
+	AgentFeishuContext      = "feishu_context_builder"
 	AgentSolutionDesigner   = "solution_designer"
 	AgentCodeGenerator      = "code_generator"
 	AgentTestGenerator      = "test_generator"
+	AgentTestExecutor       = "test_executor"
 	AgentCodeReviewer       = "code_reviewer"
 	AgentDeliveryIntegrator = "delivery_integrator"
 )
@@ -75,6 +77,23 @@ func DefaultPromptRegistry() *PromptRegistry {
 			ArtifactTitle: "结构化需求",
 		},
 		{
+			StageKey:       StageFeishuContextBuild,
+			AgentKey:       AgentFeishuContext,
+			Role:           "你是飞书上下文 Agent，负责把飞书文档链接、群聊线索、审批人和多维表字段整理成后续方案设计可消费的上下文。",
+			OutputContract: `{"summary":"","contextSources":[],"feishuDocs":[],"bitableFields":[],"conversationSignals":[],"risks":[]}`,
+			RequiredFields: []string{SchemaFieldSummary, SchemaFieldContextSources, SchemaFieldConversationSignals},
+			FieldTypes: map[string]AgentFieldType{
+				SchemaFieldSummary:             AgentFieldString,
+				SchemaFieldContextSources:      AgentFieldArray,
+				SchemaFieldFeishuDocs:          AgentFieldArray,
+				SchemaFieldBitableFields:       AgentFieldArray,
+				SchemaFieldConversationSignals: AgentFieldArray,
+				"risks":                        AgentFieldArray,
+			},
+			ArtifactType:  model.ArtifactFeishuContext,
+			ArtifactTitle: "飞书上下文",
+		},
+		{
 			StageKey:       StageSolutionDesign,
 			AgentKey:       AgentSolutionDesigner,
 			Role:           "你是方案设计 Agent，负责结合需求、仓库上下文和历史审批意见，输出技术方案和影响范围。",
@@ -132,7 +151,7 @@ func DefaultPromptRegistry() *PromptRegistry {
 		{
 			StageKey:       StageTestGeneration,
 			AgentKey:       AgentTestGenerator,
-			Role:           "你是测试生成 Agent，负责根据需求和代码变更计划输出测试计划。命令执行由后端白名单控制，你只输出建议和结构化结果。",
+			Role:           "你是测试生成 Agent，负责根据需求和代码变更计划输出测试计划。你只输出测试建议和命令候选，真实执行由后续测试执行阶段的后端白名单控制。",
 			OutputContract: `{"summary":"","testPlan":[],"commands":[],"commandResults":[],"status":""}`,
 			RequiredFields: []string{SchemaFieldSummary, SchemaFieldTestPlan, SchemaFieldStatus},
 			FieldTypes: map[string]AgentFieldType{
@@ -143,7 +162,23 @@ func DefaultPromptRegistry() *PromptRegistry {
 				SchemaFieldStatus:         AgentFieldString,
 			},
 			ArtifactType:  model.ArtifactTestReport,
-			ArtifactTitle: "测试报告",
+			ArtifactTitle: "测试计划",
+		},
+		{
+			StageKey:       StageTestExecution,
+			AgentKey:       AgentTestExecutor,
+			Role:           "你是测试执行观察 Agent，负责解释后端受控测试命令的执行结果、提炼失败摘要和后续评审线索。你不能要求执行未授权命令。",
+			OutputContract: `{"summary":"","testPlan":[],"commands":[],"commandResults":[],"status":""}`,
+			RequiredFields: []string{SchemaFieldSummary, SchemaFieldCommandResults, SchemaFieldStatus},
+			FieldTypes: map[string]AgentFieldType{
+				SchemaFieldSummary:        AgentFieldString,
+				SchemaFieldTestPlan:       AgentFieldArray,
+				SchemaFieldCommands:       AgentFieldArray,
+				SchemaFieldCommandResults: AgentFieldArray,
+				SchemaFieldStatus:         AgentFieldString,
+			},
+			ArtifactType:  model.ArtifactTestExecution,
+			ArtifactTitle: "测试执行结果",
 		},
 		{
 			StageKey:       StageCodeReview,

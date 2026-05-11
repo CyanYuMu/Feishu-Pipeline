@@ -99,9 +99,11 @@ type ArtifactType string
 
 const (
 	ArtifactStructuredRequirement ArtifactType = "structured_requirement"
+	ArtifactFeishuContext         ArtifactType = "feishu_context"
 	ArtifactSolutionDesign        ArtifactType = "solution_design"
 	ArtifactCodeDiff              ArtifactType = "code_diff"
 	ArtifactTestReport            ArtifactType = "test_report"
+	ArtifactTestExecution         ArtifactType = "test_execution"
 	ArtifactReviewReport          ArtifactType = "review_report"
 	ArtifactDeliverySummary       ArtifactType = "delivery_summary"
 )
@@ -109,9 +111,11 @@ const (
 // ArtifactTypeDescriptions 提供 ArtifactType 的中文描述
 var ArtifactTypeDescriptions = map[ArtifactType]string{
 	ArtifactStructuredRequirement: "结构化需求",
+	ArtifactFeishuContext:         "飞书上下文",
 	ArtifactSolutionDesign:        "技术方案",
 	ArtifactCodeDiff:              "代码变更计划",
 	ArtifactTestReport:            "测试报告",
+	ArtifactTestExecution:         "测试执行结果",
 	ArtifactReviewReport:          "评审报告",
 	ArtifactDeliverySummary:       "交付摘要",
 }
@@ -175,21 +179,26 @@ type PipelineTemplate struct {
 }
 
 type PipelineRun struct {
-	ID              string            `gorm:"primaryKey;size:64"`
-	TemplateID      string            `gorm:"size:64;not null;index"`
-	Template        PipelineTemplate  `gorm:"foreignKey:TemplateID;references:ID"`
-	Title           string            `gorm:"size:255;not null"`
-	RequirementText string            `gorm:"type:text;not null"`
-	SourceSessionID string            `gorm:"size:64;index"`
-	TargetRepo      string            `gorm:"size:255;not null"`
-	TargetBranch    string            `gorm:"size:255;not null"`
-	WorkBranch      string            `gorm:"size:255;not null"`
-	Status          PipelineRunStatus `gorm:"size:32;not null;index"`
-	CurrentStageKey string            `gorm:"size:128;not null"`
-	CreatedBy       string            `gorm:"size:64;not null;index"`
-	SelectedDocUrls string            `gorm:"type:text"` // JSON 数组存储飞书文档 URL
-	StartedAt       *time.Time
-	FinishedAt      *time.Time
+	ID               string            `gorm:"primaryKey;size:64"`
+	TemplateID       string            `gorm:"size:64;not null;index"`
+	Template         PipelineTemplate  `gorm:"foreignKey:TemplateID;references:ID"`
+	Title            string            `gorm:"size:255;not null"`
+	RequirementText  string            `gorm:"type:text;not null"`
+	SourceSessionID  string            `gorm:"size:64;index"`
+	TargetRepo       string            `gorm:"size:255;not null"`
+	TargetBranch     string            `gorm:"size:255;not null"`
+	WorkBranch       string            `gorm:"size:255;not null"`
+	Status           PipelineRunStatus `gorm:"size:32;not null;index"`
+	CurrentStageKey  string            `gorm:"size:128;not null"`
+	CreatedBy        string            `gorm:"size:64;not null;index"`
+	SelectedDocUrls  string            `gorm:"type:text"` // JSON 数组存储飞书文档 URL
+	FeishuDocURL     string            `gorm:"size:512"`
+	BitableAppToken  string            `gorm:"size:128"`
+	BitableTableID   string            `gorm:"size:128"`
+	BitableRecordID  string            `gorm:"size:128"`
+	BitableRecordURL string            `gorm:"size:512"`
+	StartedAt        *time.Time
+	FinishedAt       *time.Time
 	BaseModel
 }
 

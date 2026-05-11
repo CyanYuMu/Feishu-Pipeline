@@ -15,7 +15,7 @@ import (
 
 // StartFeishuWSClient 启动飞书 WebSocket 长连接客户端
 // 通过长连接接收卡片回调，无需公网回调地址
-func StartFeishuWSClient(ctx context.Context, feishuClient *feishu.Client, authService *service.AuthService) {
+func StartFeishuWSClient(ctx context.Context, feishuClient *feishu.Client, authService *service.AuthService, pipelineService *service.PipelineService) {
 	if !feishuClient.Enabled() {
 		log.Printf("[Feishu WS] disabled: feishu client not enabled")
 		return
@@ -43,6 +43,10 @@ func StartFeishuWSClient(ctx context.Context, feishuClient *feishu.Client, authS
 
 		input, _ := action["input"].(map[string]interface{})
 		intent, _ := input["intent"].(string)
+		value, _ := action["value"].(map[string]interface{})
+		if intent == "" {
+			intent = getStringFromMap(value, "intent")
+		}
 
 		message, _ := eventData["message"].(map[string]interface{})
 		sender, _ := message["sender"].(map[string]interface{})
@@ -52,6 +56,26 @@ func StartFeishuWSClient(ctx context.Context, feishuClient *feishu.Client, authS
 		messageID, _ := message["message_id"].(string)
 
 		log.Printf("[Feishu WS] intent=%s open_id=%s message_id=%s", intent, openID, messageID)
+
+		if pipelineService != nil && (intent == "pipeline_checkpoint_approve" || intent == "pipeline_checkpoint_reject") {
+			checkpointID := getStringFromMap(input, "checkpointId")
+			if checkpointID == "" {
+				checkpointID = getStringFromMap(value, "checkpointId")
+			}
+			switch intent {
+			case "pipeline_checkpoint_approve":
+				_, err := pipelineService.ApproveCheckpoint(ctx, checkpointID, "通过飞书审批卡片确认", openID)
+				if err != nil {
+					log.Printf("[Feishu WS] approve pipeline checkpoint failed: %v", err)
+				}
+			case "pipeline_checkpoint_reject":
+				_, err := pipelineService.RejectCheckpoint(ctx, checkpointID, "通过飞书审批卡片驳回，请补充后重做", openID)
+				if err != nil {
+					log.Printf("[Feishu WS] reject pipeline checkpoint failed: %v", err)
+				}
+			}
+			return nil
+		}
 
 		// 调用 authService 处理卡片回调
 		_, _ = authService.HandleFeishuCardCallback(ctx, service.FeishuCardCallbackRequest{

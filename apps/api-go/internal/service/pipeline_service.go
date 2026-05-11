@@ -79,6 +79,18 @@ type PipelineRunCurrent struct {
 	NextAction string
 }
 
+type CheckpointApprovalDetail struct {
+	Run               model.PipelineRun
+	Stage             model.StageRun
+	Checkpoint        model.Checkpoint
+	ApprovalArtifact  *model.Artifact
+	LatestArtifacts   map[model.ArtifactType]model.Artifact
+	RecentArtifacts   []model.Artifact
+	AgentRuns         []model.AgentRun
+	CanDecide         bool
+	RecommendedAction string
+}
+
 type CreatePipelineRunInput struct {
 	TemplateID      string
 	Title           string
@@ -137,6 +149,41 @@ func (s *PipelineService) GetPipelineRunCurrent(ctx context.Context, runID strin
 		return nil, err
 	}
 	return buildPipelineRunCurrent(run, stages, artifacts, checkpoints, agentRuns, deliveries), nil
+}
+
+func (s *PipelineService) GetCheckpointApprovalDetail(ctx context.Context, checkpointID string) (*CheckpointApprovalDetail, error) {
+	checkpoint, run, stage, err := s.getCheckpointDecisionContext(ctx, checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	artifacts, err := s.repository.ListArtifactsByPipelineRunID(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	agentRuns, err := s.repository.ListAgentRunsByPipelineRunID(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	latestArtifacts := latestArtifactsByModelType(artifacts)
+	approvalArtifact := selectApprovalArtifact(checkpoint, latestArtifacts)
+	recentArtifacts := recentArtifactsForApproval(checkpoint, artifacts)
+	recommendedAction := "wait"
+	if pipeline.CanApproveCheckpoint(run, stage, checkpoint) {
+		recommendedAction = "approve_or_reject"
+	}
+
+	return &CheckpointApprovalDetail{
+		Run:               run,
+		Stage:             stage,
+		Checkpoint:        checkpoint,
+		ApprovalArtifact:  approvalArtifact,
+		LatestArtifacts:   latestArtifacts,
+		RecentArtifacts:   recentArtifacts,
+		AgentRuns:         agentRuns,
+		CanDecide:         pipeline.CanApproveCheckpoint(run, stage, checkpoint),
+		RecommendedAction: recommendedAction,
+	}, nil
 }
 
 func (s *PipelineService) loadPipelineRunParts(ctx context.Context, runID string) (model.PipelineRun, []model.StageRun, []model.Artifact, []model.Checkpoint, []model.AgentRun, []model.GitDelivery, error) {
@@ -274,6 +321,81 @@ func latestGitDelivery(deliveries []model.GitDelivery) *model.GitDelivery {
 	return nil
 }
 
+func latestArtifactsByModelType(artifacts []model.Artifact) map[model.ArtifactType]model.Artifact {
+	result := map[model.ArtifactType]model.Artifact{}
+	for _, artifact := range artifacts {
+		if artifact.ID == "" || artifactSuperseded(artifact) {
+			continue
+		}
+		result[artifact.ArtifactType] = artifact
+	}
+	return result
+}
+
+func selectApprovalArtifact(checkpoint model.Checkpoint, latest map[model.ArtifactType]model.Artifact) *model.Artifact {
+	var candidates []model.ArtifactType
+	switch checkpoint.CheckpointType {
+	case model.CheckpointDesignReview:
+		candidates = []model.ArtifactType{model.ArtifactSolutionDesign, model.ArtifactFeishuContext, model.ArtifactStructuredRequirement}
+	case model.CheckpointCodeReview:
+		candidates = []model.ArtifactType{model.ArtifactReviewReport, model.ArtifactCodeDiff, model.ArtifactTestExecution, model.ArtifactTestReport}
+	default:
+		candidates = []model.ArtifactType{model.ArtifactReviewReport, model.ArtifactSolutionDesign}
+	}
+	for _, artifactType := range candidates {
+		if artifact, ok := latest[artifactType]; ok {
+			return &artifact
+		}
+	}
+	return nil
+}
+
+func recentArtifactsForApproval(checkpoint model.Checkpoint, artifacts []model.Artifact) []model.Artifact {
+	allowed := map[model.ArtifactType]bool{}
+	switch checkpoint.CheckpointType {
+	case model.CheckpointDesignReview:
+		allowed[model.ArtifactStructuredRequirement] = true
+		allowed[model.ArtifactFeishuContext] = true
+		allowed[model.ArtifactSolutionDesign] = true
+	case model.CheckpointCodeReview:
+		allowed[model.ArtifactCodeDiff] = true
+		allowed[model.ArtifactTestReport] = true
+		allowed[model.ArtifactTestExecution] = true
+		allowed[model.ArtifactReviewReport] = true
+	default:
+		for _, artifact := range artifacts {
+			allowed[artifact.ArtifactType] = true
+		}
+	}
+	items := make([]model.Artifact, 0, len(allowed))
+	for idx := len(artifacts) - 1; idx >= 0; idx-- {
+		artifact := artifacts[idx]
+		if artifact.ID == "" || artifactSuperseded(artifact) || !allowed[artifact.ArtifactType] {
+			continue
+		}
+		items = append(items, artifact)
+		if len(items) >= 6 {
+			break
+		}
+	}
+	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+		items[left], items[right] = items[right], items[left]
+	}
+	return items
+}
+
+func artifactSuperseded(artifact model.Artifact) bool {
+	if strings.TrimSpace(artifact.MetaJSON) == "" {
+		return false
+	}
+	meta := map[string]any{}
+	if err := json.Unmarshal([]byte(artifact.MetaJSON), &meta); err != nil {
+		return false
+	}
+	superseded, _ := meta["superseded"].(bool)
+	return superseded
+}
+
 func pipelineRunNextAction(run model.PipelineRun, current *PipelineRunCurrent) string {
 	switch run.Status {
 	case model.PipelineRunDraft:
@@ -386,6 +508,7 @@ func (s *PipelineService) CreatePipelineRun(ctx context.Context, input CreatePip
 	if err := s.repository.CreatePipelineRunAggregate(ctx, &run, stageRuns, checkpoints, artifacts); err != nil {
 		return nil, err
 	}
+	s.syncPipelineRunToFeishu(ctx, run.ID, "")
 
 	return s.GetPipelineRunDetail(ctx, run.ID)
 }
@@ -565,10 +688,12 @@ func (s *PipelineService) GetStatisticsStages(ctx context.Context) (pipelinetype
 	// 阶段名称映射
 	stageNameMap := map[string]string{
 		pipeline.StageRequirementAnalysis: "需求分析",
+		pipeline.StageFeishuContextBuild:  "飞书上下文构建",
 		pipeline.StageSolutionDesign:      "方案设计",
 		pipeline.StageCheckpointDesign:    "方案审批",
 		pipeline.StageCodeGeneration:      "代码生成",
 		pipeline.StageTestGeneration:      "测试生成",
+		pipeline.StageTestExecution:       "测试执行",
 		pipeline.StageCodeReview:          "代码评审",
 		pipeline.StageCheckpointReview:    "评审确认",
 		pipeline.StageDelivery:            "交付集成",
@@ -678,6 +803,7 @@ func (s *PipelineService) StartPipelineRun(ctx context.Context, runID string) (m
 	if s.queue != nil {
 		s.queue.EnqueuePipelineRun(job.PipelineRunJob{RunID: runID})
 	}
+	s.syncPipelineRunToFeishu(ctx, runID, "")
 	return s.repository.GetPipelineRunByID(ctx, runID)
 }
 
@@ -692,6 +818,7 @@ func (s *PipelineService) PausePipelineRun(ctx context.Context, runID string) (m
 	if err := s.repository.UpdatePipelineRunStatus(ctx, runID, model.PipelineRunPaused); err != nil {
 		return model.PipelineRun{}, err
 	}
+	s.syncPipelineRunToFeishu(ctx, runID, "")
 	return s.repository.GetPipelineRunByID(ctx, runID)
 }
 
@@ -709,6 +836,7 @@ func (s *PipelineService) ResumePipelineRun(ctx context.Context, runID string) (
 	if s.queue != nil {
 		s.queue.EnqueuePipelineRun(job.PipelineRunJob{RunID: runID})
 	}
+	s.syncPipelineRunToFeishu(ctx, runID, "")
 	return s.repository.GetPipelineRunByID(ctx, runID)
 }
 
@@ -723,6 +851,7 @@ func (s *PipelineService) TerminatePipelineRun(ctx context.Context, runID string
 	if err := s.repository.UpdatePipelineRunStatus(ctx, runID, model.PipelineRunTerminated); err != nil {
 		return model.PipelineRun{}, err
 	}
+	s.syncPipelineRunToFeishu(ctx, runID, "")
 	return s.repository.GetPipelineRunByID(ctx, runID)
 }
 
@@ -750,6 +879,7 @@ func (s *PipelineService) ApproveCheckpoint(ctx context.Context, checkpointID st
 	if s.queue != nil {
 		s.queue.EnqueuePipelineRun(job.PipelineRunJob{RunID: checkpoint.PipelineRunID})
 	}
+	s.syncPipelineRunToFeishu(ctx, checkpoint.PipelineRunID, "")
 	return checkpoint, nil
 }
 
@@ -817,7 +947,32 @@ func (s *PipelineService) RejectCheckpoint(ctx context.Context, checkpointID str
 	if s.queue != nil {
 		s.queue.EnqueuePipelineRun(job.PipelineRunJob{RunID: checkpoint.PipelineRunID})
 	}
+	s.syncPipelineRunToFeishu(ctx, checkpoint.PipelineRunID, trimmedComment)
 	return checkpoint, nil
+}
+
+func (s *PipelineService) syncPipelineRunToFeishu(ctx context.Context, runID string, failureCause string) {
+	if s.feishuClient == nil {
+		return
+	}
+	run, stages, artifacts, checkpoints, agentRuns, deliveries, err := s.loadPipelineRunParts(ctx, runID)
+	if err != nil {
+		return
+	}
+	result, err := s.feishuClient.UpsertPipelineRunRecord(ctx, feishu.PipelineRunSyncPayload{
+		Run:          run,
+		Stages:       stages,
+		Artifacts:    artifacts,
+		Checkpoints:  checkpoints,
+		AgentRuns:    agentRuns,
+		Deliveries:   deliveries,
+		FailureCause: failureCause,
+	})
+	if err != nil {
+		fmt.Printf("failed to sync pipeline run to feishu: %v\n", err)
+		return
+	}
+	_ = s.repository.UpdatePipelineRunFeishuLinks(ctx, run.ID, run.FeishuDocURL, result.RecordURL, result.RecordID, result.AppToken, result.TableID)
 }
 
 func (s *PipelineService) HandlePipelineRun(ctx context.Context, payload job.PipelineRunJob) error {

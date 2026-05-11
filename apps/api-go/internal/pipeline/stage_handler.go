@@ -26,9 +26,11 @@ func WithAgentRunner(agentRunner *AgentRunner) SequentialExecutorOption {
 func NewSequentialExecutor(options ...SequentialExecutorOption) *SequentialExecutor {
 	executor := &SequentialExecutor{handlers: map[string]StageHandler{
 		StageRequirementAnalysis: RequirementAnalysisHandler{},
+		StageFeishuContextBuild:  FeishuContextBuildHandler{},
 		StageSolutionDesign:      SolutionDesignHandler{},
 		StageCodeGeneration:      NewCodeGenerationHandler(nil),
 		StageTestGeneration:      TestGenerationHandler{},
+		StageTestExecution:       TestExecutionHandler{},
 		StageCodeReview:          CodeReviewHandler{},
 		StageDelivery:            DeliveryHandler{},
 	}}

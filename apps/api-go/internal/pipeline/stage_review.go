@@ -10,7 +10,10 @@ type CodeReviewHandler struct{}
 
 func (CodeReviewHandler) Execute(_ context.Context, ctx StageContext) (StageExecutionResult, error) {
 	changeSet := nestedMapSlice(ctx.Input, "latestArtifacts", model.ArtifactCodeDiff, "changeSet")
-	testStatus := nestedString(ctx.Input, "latestArtifacts", model.ArtifactTestReport, SchemaFieldStatus)
+	testStatus := nestedString(ctx.Input, "latestArtifacts", model.ArtifactTestExecution, SchemaFieldStatus)
+	if testStatus == "" {
+		testStatus = nestedString(ctx.Input, "latestArtifacts", model.ArtifactTestReport, SchemaFieldStatus)
+	}
 	issues := []map[string]any{{"severity": "medium", "filePath": "apps/api-go/internal/pipeline/executor.go", "message": "当前代码生成阶段仍为计划产物，尚未应用真实 patch。", "suggestion": "下一阶段接入受控文件执行器前继续保留人工确认。"}}
 	payload := baseStagePayload(ctx)
 	payload[SchemaFieldSummary] = "从正确性、安全性、可维护性维度完成 AI 预审。"

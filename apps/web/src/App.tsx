@@ -11,6 +11,7 @@ import Debug from './pages/Debug'
 import { APIDocument } from './pages/Swagger'
 import Assets from './pages/Assets'
 import PipelineChatPanelDemo from './pages/PipelineChatPanelDemo'
+import PipelineChatPanel from './components/PipelineChatPanel'
 
 
 
@@ -61,6 +62,16 @@ const deliveryRoute = createRoute({
   component: Delivery,
 })
 
+const approvalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/approvals/$runId',
+  component: () => (
+    <div className="min-h-screen bg-slate-50">
+      <PipelineChatPanel />
+    </div>
+  ),
+})
+
 const authCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/auth/callback',
@@ -100,7 +111,7 @@ const pipelineChatPanelDemoRoute = createRoute({
   component: PipelineChatPanelDemo,
 })
 
-const routeTree = rootRoute.addChildren([indexRoute, newRequirementRoute, workflowsRoute, monitoringRoute, deliveryRoute, authCallbackRoute, sessionRoute, debugRoute, swaggerRoute, assetsRoute, pipelineChatPanelDemoRoute])
+const routeTree = rootRoute.addChildren([indexRoute, newRequirementRoute, workflowsRoute, monitoringRoute, deliveryRoute, approvalRoute, authCallbackRoute, sessionRoute, debugRoute, swaggerRoute, assetsRoute, pipelineChatPanelDemoRoute])
 const router = createRouter({ routeTree })
 
 declare module '@tanstack/react-router' {

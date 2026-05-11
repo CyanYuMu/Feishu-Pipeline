@@ -88,6 +88,23 @@ type TaskRecordResult struct {
 	RecordURL string
 }
 
+type PipelineRunRecordResult struct {
+	AppToken  string
+	TableID   string
+	RecordID  string
+	RecordURL string
+}
+
+type PipelineRunSyncPayload struct {
+	Run          model.PipelineRun
+	Stages       []model.StageRun
+	Artifacts    []model.Artifact
+	Checkpoints  []model.Checkpoint
+	AgentRuns    []model.AgentRun
+	Deliveries   []model.GitDelivery
+	FailureCause string
+}
+
 type bitableTarget struct {
 	AppToken string
 	TableID  string
@@ -566,6 +583,76 @@ func (c *Client) CreateRequirementDoc(ctx context.Context, requirement model.Req
 	return fmt.Sprintf("https://feishu.cn/docx/%s", url.PathEscape(response.Data.Document.DocumentID)), nil
 }
 
+func (c *Client) CreatePipelineArtifactDoc(ctx context.Context, run model.PipelineRun, artifact model.Artifact) (string, error) {
+	if !c.Enabled() || c.cfg.DocFolderToken == "" {
+		return fmt.Sprintf("%s/mock/feishu/pipeline-runs/%s/artifacts/%s", c.cfg.BaseURL, run.ID, artifact.ID), nil
+	}
+
+	appAccessToken, err := c.GetAppAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var response struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Document struct {
+				DocumentID string `json:"document_id"`
+			} `json:"document"`
+		} `json:"data"`
+	}
+
+	title := fmt.Sprintf("DevFlow-%s-%s", run.Title, artifact.Title)
+	if err := c.doJSONWithToken(ctx, http.MethodPost, "/open-apis/docx/v1/documents", appAccessToken, map[string]any{
+		"folder_token": c.cfg.DocFolderToken,
+		"title":        title,
+	}, &response); err != nil {
+		return "", err
+	}
+	if response.Code != 0 {
+		return "", fmt.Errorf("create pipeline artifact doc failed: %s", response.Msg)
+	}
+	if response.Data.Document.DocumentID == "" {
+		return "", errors.New("feishu pipeline artifact document id is empty")
+	}
+
+	if err := c.appendDocumentContent(ctx, appAccessToken, response.Data.Document.DocumentID, buildPipelineArtifactMarkdown(run, artifact)); err != nil {
+		return "", fmt.Errorf("append pipeline artifact doc content failed: %w", err)
+	}
+
+	return fmt.Sprintf("https://feishu.cn/docx/%s", url.PathEscape(response.Data.Document.DocumentID)), nil
+}
+
+func (c *Client) GetDocumentRawContent(ctx context.Context, documentToken string) (string, error) {
+	documentToken = strings.TrimSpace(documentToken)
+	if documentToken == "" {
+		return "", errors.New("document token is required")
+	}
+	if !c.Enabled() {
+		return fmt.Sprintf("mock raw content for feishu document %s", documentToken), nil
+	}
+	appAccessToken, err := c.GetAppAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	var response struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	path := fmt.Sprintf("/open-apis/docx/v1/documents/%s/raw_content?lang=0", url.PathEscape(documentToken))
+	if err := c.doJSONWithToken(ctx, http.MethodGet, path, appAccessToken, nil, &response); err != nil {
+		return "", err
+	}
+	if response.Code != 0 {
+		return "", fmt.Errorf("get feishu document raw content failed: %s", response.Msg)
+	}
+	return response.Data.Content, nil
+}
+
 func (c *Client) appendDocumentContent(ctx context.Context, appAccessToken string, documentID string, markdownContent string) error {
 	documentID = strings.TrimSpace(documentID)
 	if documentID == "" {
@@ -685,6 +772,28 @@ func buildRequirementDocMarkdown(requirement model.Requirement, tasks []model.Ta
 	return strings.Join(lines, "\n")
 }
 
+func buildPipelineArtifactMarkdown(run model.PipelineRun, artifact model.Artifact) string {
+	lines := []string{
+		"# " + artifact.Title,
+		"## Pipeline",
+		"- Run ID: " + run.ID,
+		"- 需求标题: " + run.Title,
+		"- 当前阶段: " + run.CurrentStageKey,
+		"- 目标仓库: " + run.TargetRepo,
+		"- 工作分支: " + run.WorkBranch,
+		"## 摘要",
+	}
+	if strings.TrimSpace(artifact.ContentText) != "" {
+		lines = append(lines, artifact.ContentText)
+	} else {
+		lines = append(lines, "暂无文本摘要")
+	}
+	if strings.TrimSpace(artifact.ContentJSON) != "" {
+		lines = append(lines, "## 结构化 JSON", artifact.ContentJSON)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (c *Client) UpsertTaskRecord(ctx context.Context, task model.Task) (TaskRecordResult, error) {
 	target, enabled, err := c.ensureBitableTarget(ctx, task)
 	if err != nil {
@@ -744,6 +853,70 @@ func (c *Client) UpsertTaskRecord(ctx context.Context, task model.Task) (TaskRec
 	}
 
 	return TaskRecordResult{
+		AppToken:  target.AppToken,
+		TableID:   target.TableID,
+		RecordID:  recordID,
+		RecordURL: fmt.Sprintf("https://feishu.cn/base/%s?table=%s", url.QueryEscape(target.AppToken), url.QueryEscape(target.TableID)),
+	}, nil
+}
+
+func (c *Client) UpsertPipelineRunRecord(ctx context.Context, payload PipelineRunSyncPayload) (PipelineRunRecordResult, error) {
+	target, enabled, err := c.ensurePipelineBitableTarget(ctx, payload.Run)
+	if err != nil {
+		return PipelineRunRecordResult{}, err
+	}
+	if !enabled {
+		return PipelineRunRecordResult{
+			AppToken:  payload.Run.BitableAppToken,
+			TableID:   payload.Run.BitableTableID,
+			RecordID:  payload.Run.BitableRecordID,
+			RecordURL: fmt.Sprintf("%s/mock/feishu/bitable/pipeline-runs/%s", c.cfg.BaseURL, payload.Run.ID),
+		}, nil
+	}
+
+	appAccessToken, err := c.GetAppAccessToken(ctx)
+	if err != nil {
+		return PipelineRunRecordResult{}, err
+	}
+
+	fields := c.buildPipelineRunRecordFields(payload)
+	recordID := strings.TrimSpace(payload.Run.BitableRecordID)
+	if recordID == "" {
+		var createResp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Record struct {
+					RecordID string `json:"record_id"`
+				} `json:"record"`
+				RecordID string `json:"record_id"`
+			} `json:"data"`
+		}
+		if err := c.doJSONWithToken(ctx, http.MethodPost, fmt.Sprintf("/open-apis/bitable/v1/apps/%s/tables/%s/records", target.AppToken, target.TableID), appAccessToken, map[string]any{
+			"fields": fields,
+		}, &createResp); err != nil {
+			return PipelineRunRecordResult{}, err
+		}
+		if createResp.Code != 0 {
+			return PipelineRunRecordResult{}, fmt.Errorf("create pipeline bitable record failed: %s", createResp.Msg)
+		}
+		recordID = utils.Coalesce(createResp.Data.Record.RecordID, createResp.Data.RecordID)
+	} else {
+		var updateResp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := c.doJSONWithToken(ctx, http.MethodPut, fmt.Sprintf("/open-apis/bitable/v1/apps/%s/tables/%s/records/%s", target.AppToken, target.TableID, recordID), appAccessToken, map[string]any{
+			"fields": fields,
+		}, &updateResp); err != nil {
+			return PipelineRunRecordResult{}, err
+		}
+		if updateResp.Code != 0 {
+			return PipelineRunRecordResult{}, fmt.Errorf("update pipeline bitable record failed: %s", updateResp.Msg)
+		}
+	}
+
+	return PipelineRunRecordResult{
 		AppToken:  target.AppToken,
 		TableID:   target.TableID,
 		RecordID:  recordID,
@@ -853,6 +1026,15 @@ type ApprovalCardPayload struct {
 	Requirement string // 详细需求描述
 	SessionID   string // 会话ID，用于跳转链接
 	RunID       string // Pipeline Run ID
+}
+
+type PipelineCheckpointCardPayload struct {
+	Run          model.PipelineRun
+	Checkpoint   model.Checkpoint
+	Stage        model.StageRun
+	Artifact     *model.Artifact
+	ApprovalURL  string
+	RejectReason string
 }
 
 // SendApprovalCardMessage 发送需求确认卡片消息
@@ -971,6 +1153,121 @@ func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, pay
 	return SendResult{
 		Channel:    "feishu-bot",
 		Receiver:   openID,
+		Status:     "accepted",
+		RemoteID:   stringValue(resp.Data.MessageId),
+		RawPayload: string(cardJSON),
+	}, nil
+}
+
+func (c *Client) SendPipelineCheckpointCard(ctx context.Context, receiverID string, payload PipelineCheckpointCardPayload) (SendResult, error) {
+	approvalURL := strings.TrimSpace(payload.ApprovalURL)
+	if approvalURL == "" {
+		approvalURL = fmt.Sprintf("%s/approvals/%s", strings.TrimRight(c.cfg.BaseURL, "/"), payload.Run.ID)
+	}
+	artifactTitle := "待生成"
+	artifactSummary := "暂无审批产物"
+	if payload.Artifact != nil {
+		artifactTitle = payload.Artifact.Title
+		artifactSummary = utils.Summarize(utils.Coalesce(payload.Artifact.ContentText, payload.Artifact.ContentJSON), 400)
+	}
+	cardContent := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"elements": []any{
+			map[string]any{"tag": "markdown", "content": fmt.Sprintf("## DevFlow 审批：%s", payload.Run.Title)},
+			map[string]any{"tag": "markdown", "content": fmt.Sprintf("**当前阶段**：%s\n**目标仓库**：%s\n**工作分支**：%s", payload.Stage.StageKey, payload.Run.TargetRepo, payload.Run.WorkBranch)},
+			map[string]any{"tag": "hr"},
+			map[string]any{"tag": "markdown", "content": fmt.Sprintf("**待审批产物**：%s\n%s", artifactTitle, artifactSummary)},
+			map[string]any{
+				"tag": "action",
+				"actions": []any{
+					map[string]any{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "Approve",
+						},
+						"type": "primary",
+						"value": map[string]any{
+							"intent":       "pipeline_checkpoint_approve",
+							"runId":        payload.Run.ID,
+							"checkpointId": payload.Checkpoint.ID,
+						},
+						"input": map[string]any{
+							"intent":       "pipeline_checkpoint_approve",
+							"runId":        payload.Run.ID,
+							"checkpointId": payload.Checkpoint.ID,
+						},
+					},
+					map[string]any{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "Reject",
+						},
+						"type": "danger",
+						"value": map[string]any{
+							"intent":       "pipeline_checkpoint_reject",
+							"runId":        payload.Run.ID,
+							"checkpointId": payload.Checkpoint.ID,
+						},
+						"input": map[string]any{
+							"intent":       "pipeline_checkpoint_reject",
+							"runId":        payload.Run.ID,
+							"checkpointId": payload.Checkpoint.ID,
+						},
+					},
+				},
+			},
+			map[string]any{
+				"tag": "action",
+				"actions": []any{
+					map[string]any{
+						"tag": "button",
+						"text": map[string]any{
+							"tag":     "plain_text",
+							"content": "打开审批页",
+						},
+						"type": "default",
+						"url":  approvalURL,
+					},
+				},
+			},
+		},
+	}
+	if strings.TrimSpace(payload.RejectReason) != "" {
+		cardContent["elements"] = append(cardContent["elements"].([]any), map[string]any{"tag": "markdown", "content": "**上次驳回原因**：" + payload.RejectReason})
+	}
+	cardJSON, err := json.Marshal(cardContent)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("build pipeline checkpoint card failed: %w", err)
+	}
+	if !c.Enabled() || strings.TrimSpace(receiverID) == "" {
+		return SendResult{
+			Channel:    "feishu-bot",
+			Receiver:   receiverID,
+			Status:     "mock_sent",
+			RemoteID:   "mock_checkpoint_" + payload.Checkpoint.ID,
+			RawPayload: string(cardJSON),
+		}, nil
+	}
+	resp, err := c.sdk.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(c.cfg.ReceiveIDType).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(receiverID).
+			MsgType("interactive").
+			Content(string(cardJSON)).
+			Build()).
+		Build())
+	if err != nil {
+		return SendResult{}, err
+	}
+	if !resp.Success() {
+		return SendResult{}, fmt.Errorf("send pipeline checkpoint card failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return SendResult{
+		Channel:    "feishu-bot",
+		Receiver:   receiverID,
 		Status:     "accepted",
 		RemoteID:   stringValue(resp.Data.MessageId),
 		RawPayload: string(cardJSON),
@@ -1158,6 +1455,22 @@ func (c *Client) ensureBitableTarget(ctx context.Context, task model.Task) (bita
 	return target, true, nil
 }
 
+func (c *Client) ensurePipelineBitableTarget(ctx context.Context, run model.PipelineRun) (bitableTarget, bool, error) {
+	if !c.Enabled() {
+		return bitableTarget{}, false, nil
+	}
+	if run.BitableAppToken != "" && run.BitableTableID != "" {
+		return bitableTarget{AppToken: run.BitableAppToken, TableID: run.BitableTableID}, true, nil
+	}
+	if c.cfg.BitableAppToken != "" && c.cfg.BitableTableID != "" {
+		return bitableTarget{AppToken: c.cfg.BitableAppToken, TableID: c.cfg.BitableTableID}, true, nil
+	}
+	if c.cfg.BitableFolderToken == "" {
+		return bitableTarget{}, false, nil
+	}
+	return c.ensureBitableTarget(ctx, model.Task{})
+}
+
 func (c *Client) ensureBitableTable(ctx context.Context, appAccessToken string, appToken string) (string, error) {
 	var listResp struct {
 		Code int    `json:"code"`
@@ -1243,6 +1556,21 @@ func (c *Client) ensureBitableFields(ctx context.Context, appAccessToken string,
 		Name string
 		Type int
 	}{
+		{Name: "PipelineRunID", Type: 1},
+		{Name: "来源", Type: 1},
+		{Name: "当前阶段", Type: 1},
+		{Name: "发起人", Type: 1},
+		{Name: "审批人", Type: 1},
+		{Name: "目标仓库", Type: 1},
+		{Name: "目标分支", Type: 1},
+		{Name: "工作分支", Type: 1},
+		{Name: "风险等级", Type: 1},
+		{Name: "测试结果", Type: 1},
+		{Name: "MR 链接", Type: 1},
+		{Name: "Token 成本", Type: 2},
+		{Name: "最近失败原因", Type: 1},
+		{Name: "审批链接", Type: 1},
+		{Name: "交付文档", Type: 1},
 		{Name: "需求ID", Type: 1},
 		{Name: "需求标题", Type: 1},
 		{Name: "任务ID", Type: 1},
@@ -1302,6 +1630,150 @@ func (c *Client) buildTaskRecordFields(task model.Task) map[string]any {
 		fields["计划结束"] = task.PlannedEndAt.UnixMilli()
 	}
 	return fields
+}
+
+func (c *Client) buildPipelineRunRecordFields(payload PipelineRunSyncPayload) map[string]any {
+	run := payload.Run
+	fields := map[string]any{
+		"PipelineRunID": run.ID,
+		"需求ID":          utils.Coalesce(run.SourceSessionID, run.ID),
+		"需求标题":          run.Title,
+		"来源":            pipelineSource(run),
+		"状态":            string(run.Status),
+		"当前阶段":          run.CurrentStageKey,
+		"发起人":           run.CreatedBy,
+		"审批人":           latestPendingApprover(payload.Checkpoints, run.CreatedBy),
+		"目标仓库":          run.TargetRepo,
+		"目标分支":          run.TargetBranch,
+		"工作分支":          run.WorkBranch,
+		"风险等级":          latestRiskLevel(payload.Artifacts),
+		"测试结果":          latestTestResult(payload.Artifacts),
+		"MR 链接":         latestPRMRURL(payload.Deliveries),
+		"Token 成本":      totalTokenUsage(payload.AgentRuns),
+		"最近失败原因":        latestFailureCause(payload.Stages, payload.FailureCause),
+		"审批链接":          fmt.Sprintf("%s/approvals/%s", strings.TrimRight(c.cfg.BaseURL, "/"), run.ID),
+		"交付文档":          run.FeishuDocURL,
+	}
+	if run.StartedAt != nil {
+		fields["计划开始"] = run.StartedAt.UnixMilli()
+	}
+	if run.FinishedAt != nil {
+		fields["计划结束"] = run.FinishedAt.UnixMilli()
+	}
+	return fields
+}
+
+func pipelineSource(run model.PipelineRun) string {
+	if strings.TrimSpace(run.SourceSessionID) != "" {
+		return "bot_message"
+	}
+	if strings.TrimSpace(run.SelectedDocUrls) != "" && run.SelectedDocUrls != "[]" {
+		return "feishu_doc"
+	}
+	return "manual"
+}
+
+func latestPendingApprover(checkpoints []model.Checkpoint, fallback string) string {
+	for idx := len(checkpoints) - 1; idx >= 0; idx-- {
+		if checkpoints[idx].Status == model.CheckpointPending {
+			return fallback
+		}
+		if checkpoints[idx].ApproverID != "" {
+			return checkpoints[idx].ApproverID
+		}
+	}
+	return fallback
+}
+
+func latestRiskLevel(artifacts []model.Artifact) string {
+	for idx := len(artifacts) - 1; idx >= 0; idx-- {
+		payload := map[string]any{}
+		_ = json.Unmarshal([]byte(artifacts[idx].ContentJSON), &payload)
+		if value, ok := payload["riskLevel"].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+		if issues, ok := payload["issues"].([]any); ok && len(issues) > 3 {
+			return "high"
+		}
+	}
+	return "medium"
+}
+
+func latestTestResult(artifacts []model.Artifact) string {
+	for idx := len(artifacts) - 1; idx >= 0; idx-- {
+		if artifacts[idx].ArtifactType != model.ArtifactTestExecution && artifacts[idx].ArtifactType != model.ArtifactTestReport {
+			continue
+		}
+		payload := map[string]any{}
+		_ = json.Unmarshal([]byte(artifacts[idx].ContentJSON), &payload)
+		if status, ok := payload["status"].(string); ok && strings.TrimSpace(status) != "" {
+			return status
+		}
+		if conclusion, ok := payload["conclusion"].(string); ok && strings.TrimSpace(conclusion) != "" {
+			return conclusion
+		}
+		return "passed"
+	}
+	return "skipped"
+}
+
+func latestPRMRURL(deliveries []model.GitDelivery) string {
+	for idx := len(deliveries) - 1; idx >= 0; idx-- {
+		if strings.TrimSpace(deliveries[idx].PRMRURL) != "" {
+			return deliveries[idx].PRMRURL
+		}
+	}
+	return ""
+}
+
+func latestFailureCause(stages []model.StageRun, fallback string) string {
+	for idx := len(stages) - 1; idx >= 0; idx-- {
+		if strings.TrimSpace(stages[idx].ErrorMessage) != "" {
+			return stages[idx].ErrorMessage
+		}
+	}
+	return fallback
+}
+
+func totalTokenUsage(agentRuns []model.AgentRun) int64 {
+	var total int64
+	for _, agentRun := range agentRuns {
+		payload := map[string]any{}
+		if err := json.Unmarshal([]byte(agentRun.TokenUsageJSON), &payload); err != nil {
+			continue
+		}
+		if value, ok := numericTokenValue(payload["total"]); ok {
+			total += value
+			continue
+		}
+		if value, ok := numericTokenValue(payload["total_tokens"]); ok {
+			total += value
+			continue
+		}
+		if value, ok := numericTokenValue(payload["totalTokens"]); ok {
+			total += value
+			continue
+		}
+		for _, key := range []string{"prompt", "completion"} {
+			if value, ok := numericTokenValue(payload[key]); ok {
+				total += value
+			}
+		}
+	}
+	return total
+}
+
+func numericTokenValue(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	default:
+		return 0, false
+	}
 }
 
 func (c *Client) openAPIURL(path string) string {

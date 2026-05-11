@@ -116,9 +116,6 @@ func NewApplication(ctx context.Context, configPath string, version string) (*Ap
 		log.Printf("github oauth disabled")
 	}
 
-	// 启动飞书 WebSocket 长连接客户端（用于接收卡片回调）
-	StartFeishuWSClient(ctx, feishuClient, authService)
-
 	healthService := service.NewHealthService(cfg.App.Name, cfg.App.Version)
 	sessionService := service.NewSessionService(repository, authService, aiClient)
 	taskService := service.NewTaskService(repository, feishuClient)
@@ -130,6 +127,9 @@ func NewApplication(ctx context.Context, configPath string, version string) (*Ap
 	pipelineService := service.NewPipelineService(repository, feishuClient, service.WithPipelineExecutor(pipelineExecutor))
 	publishService := service.NewPublishService(repository, authService, agentEngine, feishuClient, pipelineService)
 	sessionService.SetPublisher(publishService)
+
+	// 启动飞书 WebSocket 长连接客户端（用于接收需求确认卡片和 Pipeline checkpoint 卡片回调）
+	StartFeishuWSClient(ctx, feishuClient, authService, pipelineService)
 
 	runner := job.NewRunner(nil, publishService, pipelineService)
 	publishService.SetQueue(runner)
