@@ -17,7 +17,7 @@ func (DeliveryHandler) Execute(_ context.Context, ctx StageContext) (StageExecut
 	payload := baseStagePayload(ctx)
 	payload[SchemaFieldSummary] = "Pipeline 已完成需求、方案、变更计划、测试、评审和交付摘要产物。"
 	payload[SchemaFieldChangedFiles] = changedFiles
-	payload[SchemaFieldValidation] = []string{"已生成结构化需求", "已生成技术方案", "已生成代码变更计划", "已生成测试报告", "已生成评审报告"}
+	payload[SchemaFieldValidation] = []string{"已生成结构化需求", "已生成飞书上下文", "已生成技术方案", "已生成代码变更计划", "已生成测试计划", "已生成测试执行结果", "已生成评审报告"}
 	payload[SchemaFieldPRTitle] = ctx.Run.Title
 	payload[SchemaFieldPRBody] = "包含 Pipeline 阶段产物、测试报告、评审报告和交付摘要。"
 	payload[SchemaFieldManualReleaseNotes] = []string{"审批确认后可执行 execute-changes，提交到 GitHub 工作分支并创建远程 PR"}

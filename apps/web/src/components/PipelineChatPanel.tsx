@@ -4,6 +4,7 @@ import { CloseOutlined, DownOutlined, LeftOutlined, RightOutlined, SendOutlined,
 import { useRouterState } from '@tanstack/react-router'
 import {
   approveCheckpoint,
+  fetchCheckpointApprovalDetail,
   fetchCodeDiffCached,
   fetchSessionDetail,
   fetchPipelineAgentRuns,
@@ -239,12 +240,26 @@ export default function PipelineChatPanel({ runId: runIdProp, timeline: timeline
 
   const reloadRunContext = async (targetRunId: string, options: { forceDiff?: boolean; useTimeline?: boolean } = {}) => {
     const seededCurrent = options.useTimeline ? currentFromTimeline(timelineProp) : null
-    const [currentData, agentRunData, codeDiffData] = await Promise.all([
+    const [currentData, codeDiffData] = await Promise.all([
       seededCurrent ? Promise.resolve(seededCurrent) : fetchPipelineCurrent(targetRunId),
-      timelineProp?.run.id === targetRunId ? Promise.resolve(timelineProp.agentRuns) : fetchPipelineAgentRuns(targetRunId),
       fetchCodeDiffCached(targetRunId, options.forceDiff).catch(() => null),
     ])
-    setCurrent(currentData)
+    const checkpointForDetail = currentData.checkpoint?.id || ''
+    const approvalDetail = checkpointForDetail
+      ? await fetchCheckpointApprovalDetail(checkpointForDetail).catch(() => null)
+      : null
+    const resolvedCurrent = approvalDetail
+      ? {
+          ...currentData,
+          run: approvalDetail.run,
+          stage: approvalDetail.stage,
+          checkpoint: approvalDetail.checkpoint,
+          artifact: approvalDetail.approvalArtifact || currentData.artifact,
+        }
+      : currentData
+    const agentRunData = approvalDetail?.agentRuns
+      || (timelineProp?.run.id === targetRunId ? timelineProp.agentRuns : await fetchPipelineAgentRuns(targetRunId))
+    setCurrent(resolvedCurrent)
     setAgentRuns(agentRunData)
     setCodeDiff(codeDiffData)
     if (codeDiffData?.changeSet.length) {

@@ -286,6 +286,24 @@ func (c *PipelineController) ListCheckpoints(ctx *gin.Context) {
 	writeSuccess(ctx, http.StatusOK, pipelinetype.RunCheckpointListResponse{Checkpoints: response})
 }
 
+// GetCheckpointApprovalDetail
+// @tags Checkpoint
+// @summary 获取检查点审批详情
+// @description 返回指定 checkpoint 的审批上下文，包括 PipelineRun、StageRun、Checkpoint、主审批产物、按类型归档的最新产物、近期相关产物和 AgentRun。该接口用于飞书卡片落地页、工作台审批面板和独立审批页共用同一份审批数据。
+// @router /api/checkpoints/{checkpointID}/detail [GET]
+// @produce application/json
+// @param checkpointID path string true "检查点ID"
+// @success 200 {object} pipelinetype.CheckpointApprovalDetailEnvelope
+// @failure 404 {object} pipelinetype.ErrorEnvelope
+func (c *PipelineController) GetCheckpointApprovalDetail(ctx *gin.Context) {
+	item, err := c.pipelineService.GetCheckpointApprovalDetail(ctx.Request.Context(), ctx.Param("checkpointID"))
+	if err != nil {
+		writeError(ctx, http.StatusNotFound, err)
+		return
+	}
+	writeSuccess(ctx, http.StatusOK, mapCheckpointApprovalDetail(item))
+}
+
 // ListAgentRuns
 // @tags Pipeline
 // @summary 获取流水线 Agent 执行记录
@@ -569,6 +587,34 @@ func mapPipelineRunCurrent(item *service.PipelineRunCurrent) *pipelinetype.Pipel
 	}
 	response.NextAction = item.NextAction
 	return response
+}
+
+func mapCheckpointApprovalDetail(item *service.CheckpointApprovalDetail) pipelinetype.CheckpointApprovalDetailResponse {
+	latestArtifacts := make(map[string]pipelinetype.ArtifactResponse, len(item.LatestArtifacts))
+	for artifactType, artifact := range item.LatestArtifacts {
+		latestArtifacts[string(artifactType)] = pipelinetype.NewArtifactResponse(artifact)
+	}
+	recentArtifacts := mapArtifactResponses(item.RecentArtifacts)
+	agentRuns := make([]pipelinetype.AgentRunResponse, 0, len(item.AgentRuns))
+	for _, agentRun := range item.AgentRuns {
+		agentRuns = append(agentRuns, pipelinetype.NewAgentRunResponse(agentRun))
+	}
+	var approvalArtifact *pipelinetype.ArtifactResponse
+	if item.ApprovalArtifact != nil {
+		artifact := pipelinetype.NewArtifactResponse(*item.ApprovalArtifact)
+		approvalArtifact = &artifact
+	}
+	return pipelinetype.CheckpointApprovalDetailResponse{
+		Run:               pipelinetype.NewPipelineRunResponse(item.Run),
+		Stage:             pipelinetype.NewStageRunResponse(item.Stage),
+		Checkpoint:        pipelinetype.NewCheckpointResponse(item.Checkpoint),
+		ApprovalArtifact:  approvalArtifact,
+		LatestArtifacts:   latestArtifacts,
+		RecentArtifacts:   recentArtifacts,
+		AgentRuns:         agentRuns,
+		CanDecide:         item.CanDecide,
+		RecommendedAction: item.RecommendedAction,
+	}
 }
 
 // ==================== 统计相关API ====================

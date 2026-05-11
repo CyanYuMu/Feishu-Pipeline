@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"feishu-pipeline/apps/api-go/internal/external/feishu"
@@ -84,49 +86,14 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 				return err
 			}
 
-			// Send Feishu notification when reaching checkpoint
-			if e.feishuClient != nil && e.feishuClient.Enabled() {
-				// Find the corresponding checkpoint
-				var checkpoint *model.Checkpoint
-				for _, cp := range checkpoints {
-					if cp.StageRunID == stage.ID {
-						checkpoint = &cp
-						break
-					}
-				}
-
-				if checkpoint != nil {
-					// Build notification message
-					checkpointName := "方案审批"
-					if stage.StageKey == StageCheckpointReview {
-						checkpointName = "代码评审确认"
-					}
-
-					approvalURL := fmt.Sprintf("%s/approvals/%s", e.feishuClient.BaseURL(), runID)
-
-					// Create a task to send notification
-					task := model.Task{
-						ID:            utils.NewID("task"),
-						Title:         fmt.Sprintf("流水线审批通知: %s", run.Title),
-						Description:   fmt.Sprintf("流水线已到达【%s】检查点，等待您的审批。\n\n需求描述: %s\n流水线ID: %s\n当前阶段: %s\n审批链接: %s", checkpointName, run.RequirementText, runID, stage.StageKey, approvalURL),
-						AssigneeID:    run.CreatedBy,
-						NotifyContent: fmt.Sprintf("您有一条流水线需要审批：%s", run.Title),
-						DocURL:        approvalURL,
-					}
-
-					// Send Feishu message
-					_, err := e.feishuClient.SendTaskMessage(ctx, task)
-					if err != nil {
-						// Log error but don't fail the pipeline
-						fmt.Printf("failed to send feishu notification for checkpoint: %v\n", err)
-					}
-				}
-			}
+			e.notifyCheckpoint(ctx, run, stage, artifacts, checkpoints)
+			e.syncPipelineRun(ctx, run, stages, artifacts, checkpoints, nil)
 
 			return nil
 		}
 
 		input := buildStageInput(run, stage, artifacts, checkpoints)
+		e.enrichFeishuContextInput(ctx, run, stage, input)
 		inputJSON, _ := json.Marshal(input)
 		if err := e.repository.SaveStageRunInput(ctx, stage.ID, string(inputJSON)); err != nil {
 			return err
@@ -149,6 +116,7 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 			_ = e.repository.UpdateStageRunStatus(ctx, stage.ID, model.StageRunFailed)
 			_ = e.repository.SaveStageRunOutput(ctx, stage.ID, "", execErr.Error())
 			_ = e.repository.UpdatePipelineRunStatus(ctx, runID, model.PipelineRunFailed)
+			e.syncPipelineRun(ctx, run, stages, artifacts, checkpoints, execErr)
 			return execErr
 		}
 
@@ -168,6 +136,13 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 			ContentJSON:   result.ContentJSON,
 			BaseModel:     model.BaseModel{CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()},
 		}
+		if e.feishuClient != nil && shouldCreateFeishuDocForArtifact(artifact.ArtifactType) {
+			if docURL, docErr := e.feishuClient.CreatePipelineArtifactDoc(ctx, run, artifact); docErr == nil {
+				artifact.FilePath = docURL
+			} else {
+				fmt.Printf("failed to create feishu artifact doc: %v\n", docErr)
+			}
+		}
 		if err := e.repository.CreateArtifact(ctx, &artifact); err != nil {
 			return err
 		}
@@ -178,6 +153,7 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 				return err
 			}
 		}
+		e.syncPipelineRun(ctx, run, stages, artifacts, checkpoints, nil)
 	}
 
 	if err := e.repository.UpdatePipelineRunStatus(ctx, runID, model.PipelineRunCompleted); err != nil {
@@ -185,6 +161,144 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 	}
 	if err := e.repository.UpdatePipelineRunCurrentStage(ctx, runID, StageDelivery); err != nil {
 		return err
+	}
+	if completedRun, err := e.repository.GetPipelineRunByID(ctx, runID); err == nil {
+		e.syncPipelineRun(ctx, completedRun, stages, artifacts, checkpoints, nil)
+	}
+	return nil
+}
+
+func (e *Engine) notifyCheckpoint(ctx context.Context, run model.PipelineRun, stage model.StageRun, artifacts []model.Artifact, checkpoints []model.Checkpoint) {
+	if e.feishuClient == nil {
+		return
+	}
+	var checkpoint *model.Checkpoint
+	for idx := range checkpoints {
+		if checkpoints[idx].StageRunID == stage.ID {
+			checkpoint = &checkpoints[idx]
+			break
+		}
+	}
+	if checkpoint == nil {
+		return
+	}
+	approvalURL := fmt.Sprintf("%s/approvals/%s", strings.TrimRight(e.feishuClient.BaseURL(), "/"), run.ID)
+	_, err := e.feishuClient.SendPipelineCheckpointCard(ctx, run.CreatedBy, feishu.PipelineCheckpointCardPayload{
+		Run:         run,
+		Stage:       stage,
+		Checkpoint:  *checkpoint,
+		Artifact:    latestApprovalArtifact(stage, artifacts),
+		ApprovalURL: approvalURL,
+	})
+	if err != nil {
+		fmt.Printf("failed to send feishu checkpoint card: %v\n", err)
+	}
+}
+
+func (e *Engine) syncPipelineRun(ctx context.Context, run model.PipelineRun, stages []model.StageRun, artifacts []model.Artifact, checkpoints []model.Checkpoint, cause error) {
+	if e.feishuClient == nil {
+		return
+	}
+	failureCause := ""
+	if cause != nil {
+		failureCause = cause.Error()
+	}
+	_, err := e.feishuClient.UpsertPipelineRunRecord(ctx, feishu.PipelineRunSyncPayload{
+		Run:          run,
+		Stages:       stages,
+		Artifacts:    artifacts,
+		Checkpoints:  checkpoints,
+		FailureCause: failureCause,
+	})
+	if err != nil {
+		fmt.Printf("failed to sync pipeline run to feishu bitable: %v\n", err)
+	}
+}
+
+func (e *Engine) enrichFeishuContextInput(ctx context.Context, run model.PipelineRun, stage model.StageRun, input map[string]any) {
+	if e.feishuClient == nil || stage.StageKey != StageFeishuContextBuild {
+		return
+	}
+	urls := selectedDocURLs(run)
+	if len(urls) == 0 {
+		return
+	}
+	contents := make([]map[string]any, 0, len(urls))
+	for _, rawURL := range urls {
+		token := feishuDocumentToken(rawURL)
+		if token == "" {
+			contents = append(contents, map[string]any{"url": rawURL, "status": "skipped", "error": "unsupported document url"})
+			continue
+		}
+		content, err := e.feishuClient.GetDocumentRawContent(ctx, token)
+		if err != nil {
+			contents = append(contents, map[string]any{"url": rawURL, "token": token, "status": "failed", "error": err.Error()})
+			continue
+		}
+		contents = append(contents, map[string]any{"url": rawURL, "token": token, "status": "loaded", "content": content})
+	}
+	input["feishuDocContents"] = contents
+}
+
+func selectedDocURLs(run model.PipelineRun) []string {
+	var urls []string
+	if strings.TrimSpace(run.SelectedDocUrls) == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(run.SelectedDocUrls), &urls); err != nil {
+		return nil
+	}
+	return urls
+}
+
+func feishuDocumentToken(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err == nil {
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		for idx, part := range parts {
+			if (part == "docx" || part == "docs" || part == "wiki") && idx+1 < len(parts) {
+				return strings.TrimSpace(parts[idx+1])
+			}
+		}
+		if token := parsed.Query().Get("token"); token != "" {
+			return token
+		}
+	}
+	if !strings.Contains(rawURL, "/") && !strings.Contains(rawURL, ".") {
+		return rawURL
+	}
+	return ""
+}
+
+func shouldCreateFeishuDocForArtifact(artifactType model.ArtifactType) bool {
+	switch artifactType {
+	case model.ArtifactStructuredRequirement, model.ArtifactSolutionDesign, model.ArtifactTestExecution, model.ArtifactReviewReport, model.ArtifactDeliverySummary:
+		return true
+	default:
+		return false
+	}
+}
+
+func latestApprovalArtifact(stage model.StageRun, artifacts []model.Artifact) *model.Artifact {
+	var candidates []model.ArtifactType
+	switch stage.StageKey {
+	case StageCheckpointDesign:
+		candidates = []model.ArtifactType{model.ArtifactSolutionDesign, model.ArtifactFeishuContext, model.ArtifactStructuredRequirement}
+	case StageCheckpointReview:
+		candidates = []model.ArtifactType{model.ArtifactReviewReport, model.ArtifactCodeDiff, model.ArtifactTestExecution}
+	default:
+		candidates = []model.ArtifactType{model.ArtifactReviewReport, model.ArtifactSolutionDesign}
+	}
+	for _, artifactType := range candidates {
+		for idx := len(artifacts) - 1; idx >= 0; idx-- {
+			if artifacts[idx].ArtifactType == artifactType {
+				return &artifacts[idx]
+			}
+		}
 	}
 	return nil
 }

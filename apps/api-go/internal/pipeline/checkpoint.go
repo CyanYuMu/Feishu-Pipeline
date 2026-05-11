@@ -16,7 +16,7 @@ func PreviousExecutableStage(stageKey string) string {
 func NextStagesForReset(stageKey string) []string {
 	switch stageKey {
 	case StageSolutionDesign:
-		return []string{StageCheckpointDesign, StageCodeGeneration, StageTestGeneration, StageCodeReview, StageCheckpointReview, StageDelivery}
+		return []string{StageCheckpointDesign, StageCodeGeneration, StageTestGeneration, StageTestExecution, StageCodeReview, StageCheckpointReview, StageDelivery}
 	case StageCodeReview:
 		return []string{StageCheckpointReview, StageDelivery}
 	default:

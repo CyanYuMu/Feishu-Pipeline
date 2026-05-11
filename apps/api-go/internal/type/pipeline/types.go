@@ -99,21 +99,23 @@ type PipelineTemplateResponse struct {
 }
 
 type PipelineRunResponse struct {
-	ID              string                  `json:"id"`
-	TemplateID      string                  `json:"templateId"`
-	Title           string                  `json:"title"`
-	RequirementText string                  `json:"requirementText"`
-	SourceSessionID string                  `json:"sourceSessionId,omitempty"`
-	TargetRepo      string                  `json:"targetRepo"`
-	TargetBranch    string                  `json:"targetBranch"`
-	WorkBranch      string                  `json:"workBranch"`
-	Status          model.PipelineRunStatus `json:"status"`
-	CurrentStageKey string                  `json:"currentStageKey"`
-	CreatedBy       string                  `json:"createdBy"`
-	StartedAt       *time.Time              `json:"startedAt,omitempty"`
-	FinishedAt      *time.Time              `json:"finishedAt,omitempty"`
-	CreatedAt       time.Time               `json:"createdAt"`
-	UpdatedAt       time.Time               `json:"updatedAt"`
+	ID               string                  `json:"id"`
+	TemplateID       string                  `json:"templateId"`
+	Title            string                  `json:"title"`
+	RequirementText  string                  `json:"requirementText"`
+	SourceSessionID  string                  `json:"sourceSessionId,omitempty"`
+	TargetRepo       string                  `json:"targetRepo"`
+	TargetBranch     string                  `json:"targetBranch"`
+	WorkBranch       string                  `json:"workBranch"`
+	Status           model.PipelineRunStatus `json:"status"`
+	CurrentStageKey  string                  `json:"currentStageKey"`
+	CreatedBy        string                  `json:"createdBy"`
+	StartedAt        *time.Time              `json:"startedAt,omitempty"`
+	FinishedAt       *time.Time              `json:"finishedAt,omitempty"`
+	FeishuDocURL     string                  `json:"feishuDocUrl,omitempty"`
+	BitableRecordURL string                  `json:"bitableRecordUrl,omitempty"`
+	CreatedAt        time.Time               `json:"createdAt"`
+	UpdatedAt        time.Time               `json:"updatedAt"`
 }
 
 type StageRunResponse struct {
@@ -226,6 +228,18 @@ type PipelineRunCurrentResponse struct {
 	NextAction string               `json:"nextAction"`
 }
 
+type CheckpointApprovalDetailResponse struct {
+	Run               PipelineRunResponse         `json:"run"`
+	Stage             StageRunResponse            `json:"stage"`
+	Checkpoint        CheckpointResponse          `json:"checkpoint"`
+	ApprovalArtifact  *ArtifactResponse           `json:"approvalArtifact,omitempty"`
+	LatestArtifacts   map[string]ArtifactResponse `json:"latestArtifacts"`
+	RecentArtifacts   []ArtifactResponse          `json:"recentArtifacts"`
+	AgentRuns         []AgentRunResponse          `json:"agentRuns"`
+	CanDecide         bool                        `json:"canDecide"`
+	RecommendedAction string                      `json:"recommendedAction"`
+}
+
 type PipelineRunTimelineResponse struct {
 	Run         PipelineRunResponse                `json:"run"`
 	Current     *PipelineRunCurrentResponse        `json:"current,omitempty"`
@@ -264,6 +278,11 @@ type PipelineRunTimelineEnvelope struct {
 type PipelineRunCurrentEnvelope struct {
 	Data  PipelineRunCurrentResponse `json:"data,omitempty"`
 	Error string                     `json:"error,omitempty"`
+}
+
+type CheckpointApprovalDetailEnvelope struct {
+	Data  CheckpointApprovalDetailResponse `json:"data,omitempty"`
+	Error string                           `json:"error,omitempty"`
 }
 
 type RunStageListEnvelope struct {
@@ -311,7 +330,7 @@ func NewPipelineTemplateResponse(item model.PipelineTemplate) PipelineTemplateRe
 }
 
 func NewPipelineRunResponse(item model.PipelineRun) PipelineRunResponse {
-	return PipelineRunResponse{ID: item.ID, TemplateID: item.TemplateID, Title: item.Title, RequirementText: item.RequirementText, SourceSessionID: item.SourceSessionID, TargetRepo: item.TargetRepo, TargetBranch: item.TargetBranch, WorkBranch: item.WorkBranch, Status: item.Status, CurrentStageKey: item.CurrentStageKey, CreatedBy: item.CreatedBy, StartedAt: item.StartedAt, FinishedAt: item.FinishedAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
+	return PipelineRunResponse{ID: item.ID, TemplateID: item.TemplateID, Title: item.Title, RequirementText: item.RequirementText, SourceSessionID: item.SourceSessionID, TargetRepo: item.TargetRepo, TargetBranch: item.TargetBranch, WorkBranch: item.WorkBranch, Status: item.Status, CurrentStageKey: item.CurrentStageKey, CreatedBy: item.CreatedBy, StartedAt: item.StartedAt, FinishedAt: item.FinishedAt, FeishuDocURL: item.FeishuDocURL, BitableRecordURL: item.BitableRecordURL, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
 }
 
 func NewStageRunResponse(item model.StageRun) StageRunResponse {

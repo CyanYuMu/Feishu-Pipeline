@@ -12,10 +12,12 @@ type StageDefinition struct {
 
 const (
 	StageRequirementAnalysis = "requirement_analysis"
+	StageFeishuContextBuild  = "feishu_context_build"
 	StageSolutionDesign      = "solution_design"
 	StageCheckpointDesign    = "checkpoint_design"
 	StageCodeGeneration      = "code_generation"
 	StageTestGeneration      = "test_generation"
+	StageTestExecution       = "test_execution"
 	StageCodeReview          = "code_review"
 	StageCheckpointReview    = "checkpoint_review"
 	StageDelivery            = "delivery"
@@ -23,13 +25,15 @@ const (
 
 var DefaultStageDefinitions = []StageDefinition{
 	{Key: StageRequirementAnalysis, Name: "需求分析", Type: model.StageTypeAnalysis, Order: 1},
-	{Key: StageSolutionDesign, Name: "方案设计", Type: model.StageTypeDesign, Order: 2},
-	{Key: StageCheckpointDesign, Name: "方案审批", Type: model.StageTypeCheckpoint, Order: 3, IsCheckpoint: true},
-	{Key: StageCodeGeneration, Name: "代码生成", Type: model.StageTypeCodegen, Order: 4},
-	{Key: StageTestGeneration, Name: "测试生成", Type: model.StageTypeTest, Order: 5},
-	{Key: StageCodeReview, Name: "代码评审", Type: model.StageTypeReview, Order: 6},
-	{Key: StageCheckpointReview, Name: "评审确认", Type: model.StageTypeCheckpoint, Order: 7, IsCheckpoint: true},
-	{Key: StageDelivery, Name: "交付集成", Type: model.StageTypeDelivery, Order: 8},
+	{Key: StageFeishuContextBuild, Name: "飞书上下文构建", Type: model.StageTypeAnalysis, Order: 2},
+	{Key: StageSolutionDesign, Name: "方案设计", Type: model.StageTypeDesign, Order: 3},
+	{Key: StageCheckpointDesign, Name: "方案审批", Type: model.StageTypeCheckpoint, Order: 4, IsCheckpoint: true},
+	{Key: StageCodeGeneration, Name: "代码生成", Type: model.StageTypeCodegen, Order: 5},
+	{Key: StageTestGeneration, Name: "测试生成", Type: model.StageTypeTest, Order: 6},
+	{Key: StageTestExecution, Name: "测试执行", Type: model.StageTypeTest, Order: 7},
+	{Key: StageCodeReview, Name: "代码评审", Type: model.StageTypeReview, Order: 8},
+	{Key: StageCheckpointReview, Name: "评审确认", Type: model.StageTypeCheckpoint, Order: 9, IsCheckpoint: true},
+	{Key: StageDelivery, Name: "交付集成", Type: model.StageTypeDelivery, Order: 10},
 }
 
 func IsRunnableStageStatus(status model.StageRunStatus) bool {

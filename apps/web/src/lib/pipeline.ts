@@ -168,6 +168,18 @@ export interface PipelineRunCurrent {
   nextAction: string
 }
 
+export interface CheckpointApprovalDetail {
+  run: PipelineRun
+  stage: StageRun
+  checkpoint: Checkpoint
+  approvalArtifact?: Artifact
+  latestArtifacts: Record<string, Artifact>
+  recentArtifacts: Artifact[]
+  agentRuns: AgentRun[]
+  canDecide: boolean
+  recommendedAction: string
+}
+
 export interface PipelineRunTimeline {
   run: PipelineRun
   current?: PipelineRunCurrent
@@ -217,6 +229,10 @@ export async function fetchPipelineTimeline(runId: string): Promise<PipelineRunT
 
 export async function fetchPipelineCurrent(runId: string): Promise<PipelineRunCurrent> {
   return request<PipelineRunCurrent>(`/api/pipeline-runs/${runId}/current`)
+}
+
+export async function fetchCheckpointApprovalDetail(checkpointId: string): Promise<CheckpointApprovalDetail> {
+  return request<CheckpointApprovalDetail>(`/api/checkpoints/${checkpointId}/detail`)
 }
 
 export async function fetchPipelineDeliveries(runId: string): Promise<GitDelivery[]> {

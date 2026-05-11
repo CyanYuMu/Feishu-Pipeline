@@ -678,6 +678,28 @@ func (r *Repository) UpdatePipelineRunCurrentStage(ctx context.Context, runID st
 	}).Error
 }
 
+func (r *Repository) UpdatePipelineRunFeishuLinks(ctx context.Context, runID string, docURL string, bitableURL string, bitableRecordID string, bitableAppToken string, bitableTableID string) error {
+	updates := map[string]any{
+		"updated_at": time.Now().UTC(),
+	}
+	if docURL != "" {
+		updates["feishu_doc_url"] = docURL
+	}
+	if bitableURL != "" {
+		updates["bitable_record_url"] = bitableURL
+	}
+	if bitableRecordID != "" {
+		updates["bitable_record_id"] = bitableRecordID
+	}
+	if bitableAppToken != "" {
+		updates["bitable_app_token"] = bitableAppToken
+	}
+	if bitableTableID != "" {
+		updates["bitable_table_id"] = bitableTableID
+	}
+	return r.db.WithContext(ctx).Model(&model.PipelineRun{}).Where("id = ?", runID).Updates(updates).Error
+}
+
 func (r *Repository) CreateStageRuns(ctx context.Context, items []model.StageRun) error {
 	if len(items) == 0 {
 		return nil

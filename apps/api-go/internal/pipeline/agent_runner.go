@@ -242,7 +242,7 @@ func aggregateLatency(observations []*AgentObservation) int64 {
 
 func (r *AgentRunner) enrichProviderPayload(ctx context.Context, stageContext StageContext, fallback StageHandler, spec AgentPromptSpec, providerPayload map[string]any) (map[string]any, error) {
 	enriched := baseStagePayload(stageContext)
-	if spec.StageKey == StageTestGeneration {
+	if spec.StageKey == StageTestGeneration || spec.StageKey == StageTestExecution {
 		fallbackResult, err := fallback.Execute(ctx, stageContext)
 		if err != nil {
 			return nil, err
@@ -250,7 +250,7 @@ func (r *AgentRunner) enrichProviderPayload(ctx context.Context, stageContext St
 		_ = json.Unmarshal([]byte(fallbackResult.OutputJSON), &enriched)
 	}
 	for key, value := range providerPayload {
-		if spec.StageKey == StageTestGeneration && isBackendControlledTestField(key) {
+		if (spec.StageKey == StageTestGeneration || spec.StageKey == StageTestExecution) && isBackendControlledTestField(key) {
 			continue
 		}
 		enriched[key] = value

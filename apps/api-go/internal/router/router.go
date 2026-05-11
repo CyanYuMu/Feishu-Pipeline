@@ -81,6 +81,7 @@ func New(deps Dependencies) *gin.Engine {
 	authenticated.POST("/pipeline-runs/:id/terminate", deps.PipelineController.TerminateRun)
 	authenticated.POST("/pipeline-runs/:id/execute-changes", deps.PipelineController.ExecuteChanges)
 	authenticated.GET("/git-deliveries/:deliveryID", deps.PipelineController.GetGitDelivery)
+	authenticated.GET("/checkpoints/:checkpointID/detail", deps.PipelineController.GetCheckpointApprovalDetail)
 	authenticated.POST("/checkpoints/:checkpointID/approve", deps.PipelineController.ApproveCheckpoint)
 	authenticated.POST("/checkpoints/:checkpointID/reject", deps.PipelineController.RejectCheckpoint)
 	// 统计相关API

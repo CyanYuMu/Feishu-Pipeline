@@ -134,8 +134,9 @@ func TestEngineRunCompletesAfterCheckpointApprovals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list agent runs: %v", err)
 	}
-	if len(agentRuns) != 6 {
-		t.Fatalf("expected 6 executable agent runs, got %d", len(agentRuns))
+	expectedAgentRuns := executableStageCount()
+	if len(agentRuns) != expectedAgentRuns {
+		t.Fatalf("expected %d executable agent runs, got %d", expectedAgentRuns, len(agentRuns))
 	}
 }
 
@@ -306,6 +307,16 @@ func hasArtifactType(items []model.Artifact, artifactType model.ArtifactType) bo
 	return false
 }
 
+func executableStageCount() int {
+	count := 0
+	for _, definition := range pipeline.DefaultStageDefinitions {
+		if definition.Type != model.StageTypeCheckpoint {
+			count++
+		}
+	}
+	return count
+}
+
 type lifecycleExecutor struct {
 	onStage func(context.Context, model.StageRun) error
 }
@@ -318,12 +329,16 @@ func (e lifecycleExecutor) Execute(ctx context.Context, stageContext pipeline.St
 	}
 	artifactType := model.ArtifactStructuredRequirement
 	switch stageContext.Stage.StageKey {
+	case pipeline.StageFeishuContextBuild:
+		artifactType = model.ArtifactFeishuContext
 	case pipeline.StageSolutionDesign:
 		artifactType = model.ArtifactSolutionDesign
 	case pipeline.StageCodeGeneration:
 		artifactType = model.ArtifactCodeDiff
 	case pipeline.StageTestGeneration:
 		artifactType = model.ArtifactTestReport
+	case pipeline.StageTestExecution:
+		artifactType = model.ArtifactTestExecution
 	case pipeline.StageCodeReview:
 		artifactType = model.ArtifactReviewReport
 	case pipeline.StageDelivery:
