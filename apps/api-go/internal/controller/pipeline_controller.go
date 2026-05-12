@@ -94,6 +94,35 @@ func (c *PipelineController) CreateRun(ctx *gin.Context) {
 	writeSuccess(ctx, http.StatusCreated, mapPipelineRunDetail(item))
 }
 
+// HandleFeishuBotEvent
+// @tags 飞书
+// @summary 飞书机器人事件
+// @description 接收飞书机器人消息事件，从自然语言需求创建并启动 PipelineRun。
+// @router /public/feishu/events [POST]
+// @accept application/json
+// @produce application/json
+func (c *PipelineController) HandleFeishuBotEvent(ctx *gin.Context) {
+	var req service.FeishuBotEventRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+	result, err := c.pipelineService.HandleFeishuBotEvent(ctx.Request.Context(), req)
+	if err != nil {
+		writeError(ctx, http.StatusBadRequest, err)
+		return
+	}
+	if result.Challenge != "" {
+		ctx.JSON(http.StatusOK, gin.H{"challenge": result.Challenge})
+		return
+	}
+	status := http.StatusOK
+	if result.PipelineRunID != "" && !result.Ignored {
+		status = http.StatusCreated
+	}
+	writeSuccess(ctx, status, result)
+}
+
 // CreateRunFromSession
 // @tags Pipeline
 // @summary 从会话创建流水线运行

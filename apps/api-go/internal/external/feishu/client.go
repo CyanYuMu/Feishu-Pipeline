@@ -1063,68 +1063,38 @@ func (c *Client) SendApprovalCardMessage(ctx context.Context, openID string, pay
 		"config": map[string]any{
 			"wide_screen_mode": true,
 		},
-		"elements": []any{
-			// 标题区域
-			map[string]any{
-				"tag":     "markdown",
-				"content": fmt.Sprintf("## 📋 **%s**", payload.Title),
-			},
-			// 分隔线
-			map[string]any{
-				"tag": "hr",
-			},
-			// 需求摘要
-			map[string]any{
-				"tag":     "markdown",
-				"content": fmt.Sprintf("**📝 需求摘要**\n%s", payload.Summary),
-			},
-			// 详细描述（如果有）
-			map[string]any{
-				"tag":     "markdown",
-				"content": fmt.Sprintf("**📄 详细需求**\n%s", payload.Requirement),
-			},
-			// 分隔线
-			map[string]any{
-				"tag": "hr",
-			},
-			// 提示信息
-			map[string]any{
-				"tag":     "markdown",
-				"content": "⚠️ 请确认需求细节是否完整准确，点击下方按钮进行审批",
-			},
-			// 按钮区域
-			map[string]any{
-				"tag": "action",
-				"actions": []any{
-					map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": "✅ 确认发布",
-						},
-						"type":   "primary",
-						"intent": "approve",
-					},
-					map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": "❌ 补充信息",
-						},
-						"type":   "danger",
-						"intent": "reject",
-					},
+		"body": map[string]any{
+			"elements": []any{
+				// 标题区域
+				map[string]any{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("## 📋 **%s**", payload.Title),
 				},
-			},
-			// 跳转链接
-			map[string]any{
-				"tag": "action",
-				"actions": []any{
-					map[string]any{
-						"tag":   "link",
-						"text":  map[string]any{"tag": "plain_text", "content": "🔗 查看详情"},
-						"value": detailURL,
-					},
+				// 分隔线
+				map[string]any{
+					"tag": "hr",
+				},
+				// 需求摘要
+				map[string]any{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("**📝 需求摘要**\n%s", payload.Summary),
+				},
+				// 详细描述（如果有）
+				map[string]any{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("**📄 详细需求**\n%s", payload.Requirement),
+				},
+				// 分隔线
+				map[string]any{
+					"tag": "hr",
+				},
+				map[string]any{
+					"tag":     "markdown",
+					"content": "⚠️ 请确认需求细节是否完整准确，并在页面内完成审批。",
+				},
+				map[string]any{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("[查看详情](%s)", detailURL),
 				},
 			},
 		},
@@ -1173,70 +1143,22 @@ func (c *Client) SendPipelineCheckpointCard(ctx context.Context, receiverID stri
 	cardContent := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{"wide_screen_mode": true},
-		"elements": []any{
-			map[string]any{"tag": "markdown", "content": fmt.Sprintf("## DevFlow 审批：%s", payload.Run.Title)},
-			map[string]any{"tag": "markdown", "content": fmt.Sprintf("**当前阶段**：%s\n**目标仓库**：%s\n**工作分支**：%s", payload.Stage.StageKey, payload.Run.TargetRepo, payload.Run.WorkBranch)},
-			map[string]any{"tag": "hr"},
-			map[string]any{"tag": "markdown", "content": fmt.Sprintf("**待审批产物**：%s\n%s", artifactTitle, artifactSummary)},
-			map[string]any{
-				"tag": "action",
-				"actions": []any{
-					map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": "Approve",
-						},
-						"type": "primary",
-						"value": map[string]any{
-							"intent":       "pipeline_checkpoint_approve",
-							"runId":        payload.Run.ID,
-							"checkpointId": payload.Checkpoint.ID,
-						},
-						"input": map[string]any{
-							"intent":       "pipeline_checkpoint_approve",
-							"runId":        payload.Run.ID,
-							"checkpointId": payload.Checkpoint.ID,
-						},
-					},
-					map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": "Reject",
-						},
-						"type": "danger",
-						"value": map[string]any{
-							"intent":       "pipeline_checkpoint_reject",
-							"runId":        payload.Run.ID,
-							"checkpointId": payload.Checkpoint.ID,
-						},
-						"input": map[string]any{
-							"intent":       "pipeline_checkpoint_reject",
-							"runId":        payload.Run.ID,
-							"checkpointId": payload.Checkpoint.ID,
-						},
-					},
-				},
-			},
-			map[string]any{
-				"tag": "action",
-				"actions": []any{
-					map[string]any{
-						"tag": "button",
-						"text": map[string]any{
-							"tag":     "plain_text",
-							"content": "打开审批页",
-						},
-						"type": "default",
-						"url":  approvalURL,
-					},
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{"tag": "markdown", "content": fmt.Sprintf("## DevFlow 审批：%s", payload.Run.Title)},
+				map[string]any{"tag": "markdown", "content": fmt.Sprintf("**当前阶段**：%s\n**目标仓库**：%s\n**工作分支**：%s", payload.Stage.StageKey, payload.Run.TargetRepo, payload.Run.WorkBranch)},
+				map[string]any{"tag": "hr"},
+				map[string]any{"tag": "markdown", "content": fmt.Sprintf("**待审批产物**：%s\n%s", artifactTitle, artifactSummary)},
+				map[string]any{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("[打开审批页](%s)", approvalURL),
 				},
 			},
 		},
 	}
 	if strings.TrimSpace(payload.RejectReason) != "" {
-		cardContent["elements"] = append(cardContent["elements"].([]any), map[string]any{"tag": "markdown", "content": "**上次驳回原因**：" + payload.RejectReason})
+		body := cardContent["body"].(map[string]any)
+		body["elements"] = append(body["elements"].([]any), map[string]any{"tag": "markdown", "content": "**上次驳回原因**：" + payload.RejectReason})
 	}
 	cardJSON, err := json.Marshal(cardContent)
 	if err != nil {
@@ -1264,6 +1186,63 @@ func (c *Client) SendPipelineCheckpointCard(ctx context.Context, receiverID stri
 	}
 	if !resp.Success() {
 		return SendResult{}, fmt.Errorf("send pipeline checkpoint card failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return SendResult{
+		Channel:    "feishu-bot",
+		Receiver:   receiverID,
+		Status:     "accepted",
+		RemoteID:   stringValue(resp.Data.MessageId),
+		RawPayload: string(cardJSON),
+	}, nil
+}
+
+func (c *Client) SendPipelineRunStatusCard(ctx context.Context, receiverID string, receiveIDType string, run model.PipelineRun) (SendResult, error) {
+	if strings.TrimSpace(receiveIDType) == "" {
+		receiveIDType = c.cfg.ReceiveIDType
+	}
+	approvalURL := fmt.Sprintf("%s/approvals/%s", strings.TrimRight(c.cfg.BaseURL, "/"), run.ID)
+	cardContent := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"wide_screen_mode": true},
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{"tag": "markdown", "content": fmt.Sprintf("## DevFlow 已创建研发流水线\n**%s**", run.Title)},
+				map[string]any{"tag": "markdown", "content": fmt.Sprintf("**Pipeline Run**：%s\n**状态**：%s\n**当前阶段**：%s\n**目标仓库**：%s\n**目标分支**：%s", run.ID, run.Status, run.CurrentStageKey, run.TargetRepo, run.TargetBranch)},
+				map[string]any{"tag": "hr"},
+				map[string]any{"tag": "markdown", "content": fmt.Sprintf("**多维表格台账**：%s", utils.Coalesce(run.BitableRecordURL, "待同步"))},
+				map[string]any{
+					"tag":     "markdown",
+					"content": fmt.Sprintf("[打开流水线](%s)", approvalURL),
+				},
+			},
+		},
+	}
+	cardJSON, err := json.Marshal(cardContent)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("build pipeline status card failed: %w", err)
+	}
+	if !c.Enabled() || strings.TrimSpace(receiverID) == "" {
+		return SendResult{
+			Channel:    "feishu-bot",
+			Receiver:   receiverID,
+			Status:     "mock_sent",
+			RemoteID:   "mock_pipeline_status_" + run.ID,
+			RawPayload: string(cardJSON),
+		}, nil
+	}
+	resp, err := c.sdk.Im.Message.Create(ctx, larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(receiveIDType).
+		Body(larkim.NewCreateMessageReqBodyBuilder().
+			ReceiveId(receiverID).
+			MsgType("interactive").
+			Content(string(cardJSON)).
+			Build()).
+		Build())
+	if err != nil {
+		return SendResult{}, err
+	}
+	if !resp.Success() {
+		return SendResult{}, fmt.Errorf("send pipeline status card failed: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	return SendResult{
 		Channel:    "feishu-bot",

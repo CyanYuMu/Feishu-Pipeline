@@ -10,6 +10,7 @@ import (
 
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
@@ -21,8 +22,37 @@ func StartFeishuWSClient(ctx context.Context, feishuClient *feishu.Client, authS
 		return
 	}
 
-	// 创建事件分发器，监听卡片回传交互回调
+	// 创建事件分发器，监听机器人消息事件与卡片回传交互回调
 	evtDispatcher := dispatcher.NewEventDispatcher("", "")
+
+	evtDispatcher.OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+		if pipelineService == nil {
+			log.Printf("[Feishu WS] message received but pipeline service is not available")
+			return nil
+		}
+		req := mapP2MessageReceiveV1ToBotEvent(event)
+		log.Printf(
+			"[Feishu WS] message received: event_type=%s message_id=%s chat_id=%s message_type=%s",
+			req.Header.EventType,
+			req.Event.Message.MessageID,
+			req.Event.Message.ChatID,
+			req.Event.Message.MessageType,
+		)
+		result, err := pipelineService.HandleFeishuBotEvent(ctx, req)
+		if err != nil {
+			log.Printf("[Feishu WS] handle bot message failed: %v", err)
+			return nil
+		}
+		log.Printf(
+			"[Feishu WS] bot message handled: ignored=%t run_id=%s status=%s stage=%s message=%s",
+			result.Ignored,
+			result.PipelineRunID,
+			result.Status,
+			result.CurrentStageKey,
+			result.Message,
+		)
+		return nil
+	})
 
 	// 使用 OnCustomizedEvent 监听 card.action.trigger 事件
 	evtDispatcher.OnCustomizedEvent("card.action.trigger", func(ctx context.Context, req *larkevent.EventReq) error {
@@ -173,4 +203,35 @@ func getStringFromMap(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+func mapP2MessageReceiveV1ToBotEvent(event *larkim.P2MessageReceiveV1) service.FeishuBotEventRequest {
+	var req service.FeishuBotEventRequest
+	req.Type = "event_callback"
+	req.Header.EventType = "im.message.receive_v1"
+	if event == nil || event.Event == nil {
+		return req
+	}
+	if event.EventV2Base != nil && event.EventV2Base.Header != nil {
+		req.Header.EventType = event.EventV2Base.Header.EventType
+	}
+	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+		req.Event.Sender.SenderID.OpenID = valueOf(event.Event.Sender.SenderId.OpenId)
+		req.Event.Sender.SenderID.UserID = valueOf(event.Event.Sender.SenderId.UserId)
+		req.Event.Sender.SenderID.UnionID = valueOf(event.Event.Sender.SenderId.UnionId)
+	}
+	if event.Event.Message != nil {
+		req.Event.Message.MessageID = valueOf(event.Event.Message.MessageId)
+		req.Event.Message.ChatID = valueOf(event.Event.Message.ChatId)
+		req.Event.Message.MessageType = valueOf(event.Event.Message.MessageType)
+		req.Event.Message.Content = valueOf(event.Event.Message.Content)
+	}
+	return req
+}
+
+func valueOf(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

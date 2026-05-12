@@ -91,6 +91,7 @@ func New(deps Dependencies) *gin.Engine {
 	authenticated.GET("/pipeline/statistics/agents", deps.PipelineController.GetStatisticsAgents)
 
 	// 飞书卡片回调接口（公网回调，需要签名验证）
+	engine.POST("/public/feishu/events", deps.PipelineController.HandleFeishuBotEvent)
 	engine.POST("/public/feishu/card/callback", deps.AuthController.HandleFeishuCardCallback)
 
 	// OpenAPI Spec 接口（需要认证）

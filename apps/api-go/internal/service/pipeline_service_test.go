@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,85 @@ import (
 	"feishu-pipeline/apps/api-go/internal/pipeline"
 	"feishu-pipeline/apps/api-go/internal/repo"
 )
+
+func TestHandleFeishuBotEventCreatesAndStartsPipelineRun(t *testing.T) {
+	repository := newPipelineTestRepository(t)
+	service := NewPipelineService(repository, nil)
+	ctx := context.Background()
+
+	content, _ := json.Marshal(map[string]string{
+		"text": "@DevFlow 为 Pipeline 增加失败阶段自动重试能力，目标仓库是 Feishu-Pipeline，目标分支是 develop，审批人是 tech_lead，评审人是 reviewer_a，上线确认人是 release_a。PRD：https://example.feishu.cn/docx/ABC123",
+	})
+	var req FeishuBotEventRequest
+	req.Header.EventType = "im.message.receive_v1"
+	req.Event.Sender.SenderID.OpenID = "ou_user"
+	req.Event.Message.MessageID = "om_message_1"
+	req.Event.Message.ChatID = "oc_chat"
+	req.Event.Message.MessageType = "text"
+	req.Event.Message.Content = string(content)
+
+	result, err := service.HandleFeishuBotEvent(ctx, req)
+	if err != nil {
+		t.Fatalf("handle bot event: %v", err)
+	}
+	if result.PipelineRunID == "" || result.Status != model.PipelineRunQueued {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	run, err := repository.GetPipelineRunByID(ctx, result.PipelineRunID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if run.SourceSessionID != "feishu:om_message_1" {
+		t.Fatalf("unexpected source session id: %s", run.SourceSessionID)
+	}
+	if run.CreatedBy != "ou_user" {
+		t.Fatalf("unexpected created by: %s", run.CreatedBy)
+	}
+	if run.TargetRepo != "Feishu-Pipeline" || run.TargetBranch != "develop" {
+		t.Fatalf("unexpected target: repo=%s branch=%s", run.TargetRepo, run.TargetBranch)
+	}
+	if !strings.Contains(run.SelectedDocUrls, "https://example.feishu.cn/docx/ABC123") {
+		t.Fatalf("expected selected doc url, got %s", run.SelectedDocUrls)
+	}
+	if !strings.Contains(run.RequirementText, "审批人：tech_lead") {
+		t.Fatalf("expected approver in requirement text, got %s", run.RequirementText)
+	}
+	if !strings.Contains(run.RequirementText, "评审人：reviewer_a") || !strings.Contains(run.RequirementText, "上线确认人：release_a") {
+		t.Fatalf("expected reviewer and release confirmer in requirement text, got %s", run.RequirementText)
+	}
+}
+
+func TestHandleFeishuBotEventIsIdempotentForMessageID(t *testing.T) {
+	repository := newPipelineTestRepository(t)
+	service := NewPipelineService(repository, nil)
+	ctx := context.Background()
+
+	content, _ := json.Marshal(map[string]string{"text": "@DevFlow 创建模板复制功能，目标仓库是 self"})
+	var req FeishuBotEventRequest
+	req.Header.EventType = "im.message.receive_v1"
+	req.Event.Sender.SenderID.OpenID = "ou_user"
+	req.Event.Message.MessageID = "om_duplicate"
+	req.Event.Message.Content = string(content)
+
+	first, err := service.HandleFeishuBotEvent(ctx, req)
+	if err != nil {
+		t.Fatalf("first event: %v", err)
+	}
+	second, err := service.HandleFeishuBotEvent(ctx, req)
+	if err != nil {
+		t.Fatalf("second event: %v", err)
+	}
+	if first.PipelineRunID == "" || first.PipelineRunID != second.PipelineRunID {
+		t.Fatalf("expected same run id, first=%+v second=%+v", first, second)
+	}
+	runs, err := repository.ListPipelineRuns(ctx)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(runs))
+	}
+}
 
 func TestGetPipelineRunTimelineAggregatesWaitingApprovalState(t *testing.T) {
 	repository := newPipelineTestRepository(t)

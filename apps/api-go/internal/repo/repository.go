@@ -652,6 +652,12 @@ func (r *Repository) GetPipelineRunByID(ctx context.Context, runID string) (mode
 	return item, err
 }
 
+func (r *Repository) GetPipelineRunBySourceSessionID(ctx context.Context, sourceSessionID string) (model.PipelineRun, error) {
+	var item model.PipelineRun
+	err := r.db.WithContext(ctx).First(&item, "source_session_id = ?", sourceSessionID).Error
+	return item, err
+}
+
 func (r *Repository) ListPipelineRuns(ctx context.Context) ([]model.PipelineRun, error) {
 	var items []model.PipelineRun
 	err := r.db.WithContext(ctx).Order("created_at DESC").Find(&items).Error
